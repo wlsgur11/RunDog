@@ -1,0 +1,42 @@
+# Windows용 RunDog.exe 빌드.
+# main에 push하면 Actions 탭의 아티팩트로, v로 시작하는 태그를 push하면 Releases에 exe가 올라감
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r windows/requirements.txt pyinstaller
+
+      - name: Self test (drawing, icon handles, CPU/GPU counters)
+        run: python windows/rundog.py --selftest
+
+      - name: Build exe
+        run: pyinstaller --onefile --noconsole --name RunDog --hidden-import pystray._win32 windows/rundog.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RunDog-windows
+          path: dist/RunDog.exe
+
+      - name: Attach exe to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/RunDog.exe

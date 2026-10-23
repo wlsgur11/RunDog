@@ -1,0 +1,6 @@
+.DS_Store
+mac/build/
+build/
+dist/
+*.spec
+__pycache__/
