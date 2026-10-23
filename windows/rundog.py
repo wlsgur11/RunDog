@@ -40,13 +40,14 @@ class Shape:
 
 
 class Canvas:
-    """size x size 픽셀 격자. 캐릭터 단위 좌표(unit_w x 18)를 가운데에 맞춰 축소/확대해서 찍음."""
+    """size x size 픽셀 격자. 캐릭터 단위 좌표의 상자 box(x0, y0, x1, y1)를 가운데에 맞춰 축소/확대해서 찍음."""
 
-    def __init__(self, size, unit_w):
+    def __init__(self, size, box):
+        x0, y0, x1, y1 = box
         self.w = self.h = size
-        self.scale = size / max(unit_w, UNIT_H)
-        self.ox = (size / self.scale - unit_w) / 2
-        self.oy = (size / self.scale - UNIT_H) / 2
+        self.scale = size / max(x1 - x0, y1 - y0)
+        self.ox = (size / self.scale - (x1 - x0)) / 2 - x0
+        self.oy = (size / self.scale - (y1 - y0)) / 2 - y0
         self.ink = [NONE] * (size * size)
         # 몸통·머리·다리 같은 부위 번호. 나중에 그린 부위가 앞에 있어서 경계에 테두리가 생김
         self.part = [0] * (size * size)
@@ -222,45 +223,49 @@ def gallop_leg(root, w, phase, hind, amp, upper, lower, r, paw):
     return leg(root, upper, lower, amp * math.sin(a) + rest, 0.8 * max(0.0, math.cos(a)) + rest * 2, r, paw)
 
 
+# 트레이 아이콘은 정사각형이라 Mac 버전보다 몸통을 짧게 그림: 머리는 뒤로(HX), 꼬리는 앞으로(TX) 당김
+
 def dog_frame(c, t, stress):
+    HX, TX = -4.0, 3.0
     w = 2 * math.pi * t
     bob = 0.6 * math.sin(2 * w)
     hb = bob + 0.4 * math.sin(2 * w - 0.8)
     wag = 0.9 * math.sin(2 * w)
-    shoulder, hip = (19.5, 5.6 + bob), (9.5, 5.6 + bob)
+    shoulder, hip = (17.0, 5.6 + bob), (10.5, 5.6 + bob)
 
     def dog_leg(root, phase, hind):
         return gallop_leg(root, w, phase, hind, 0.7, 2.2, 2.3, 1.3, (1.5, 1))
 
     c.paint(FAR, dog_leg((shoulder[0] - 1.2, shoulder[1]), 0.12, False))
     c.paint(FAR, dog_leg((hip[0] - 1.2, hip[1]), 0.62, True))
-    tail_tip = (5.5 + wag, 14.5 + bob)
-    c.paint(BODY, curve([(8, 9 + bob), (5, 10.5 + bob), tail_tip], 1.4, 1))
+    tail_tip = (5.5 + TX + wag, 14.5 + bob)
+    c.paint(BODY, curve([(8 + TX, 9 + bob), (5 + TX, 10.5 + bob), tail_tip], 1.4, 1))
     c.paint(LIGHT, ellipse(tail_tip[0], tail_tip[1] - 0.3, 1.2, 1.2))
     # 동글동글한 몸통 + 밝은 가슴털
-    c.paint(BODY, ellipse(14.5, 7.4 + bob, 6.6, 4, tilt=0.05 * math.sin(w)))
-    c.paint(LIGHT, ellipse(19.2, 6 + bob, 2.4, 1.8))
+    c.paint(BODY, ellipse(13.7, 7.4 + bob, 5.2, 4, tilt=0.05 * math.sin(w)))
+    c.paint(LIGHT, ellipse(17, 6 + bob, 2.2, 1.8))
     c.paint(BODY, dog_leg(shoulder, 0, False))
     c.paint(BODY, dog_leg(hip, 0.5, True))
     # 큰 머리 + 밝은 주둥이
-    c.paint(BODY, ellipse(23.3, 11.4 + hb, 5.3, 4.8))
-    c.paint(LIGHT, ellipse(27.6, 9.6 + hb, 2.4, 1.7))
+    c.paint(BODY, ellipse(23.3 + HX, 11.4 + hb, 5.3, 4.8))
+    c.paint(LIGHT, ellipse(27.6 + HX, 9.6 + hb, 2.4, 1.7))
     if stress:
-        c.paint(TONGUE, capsule((27.3, 8.4 + hb), (26.9, 6.9 + hb), 0.85))
+        c.paint(TONGUE, capsule((27.3 + HX, 8.4 + hb), (26.9 + HX, 6.9 + hb), 0.85))
     # 축 처진 귀, 달릴 때 살짝 펄럭임
-    c.paint(EAR, curve([(22.3, 15.4 + hb), (19.3, 15.1 + hb), (19.1 + 0.7 * math.sin(2 * w - 1.2), 10.8 + hb)], 1.6, 1.2))
-    c.paint(BLUSH, ellipse(24.4, 9.6 + hb, 1.1, 0.65))
-    c.paint(DARK, ellipse(25.6, 12.1 + hb, 1.05, 1.5))
-    c.dot(HOLE, (25.3, 12.8 + hb))
-    c.paint(DARK, ellipse(29.4, 10.5 + hb, 1, 0.8))
+    c.paint(EAR, curve([(22.3 + HX, 15.4 + hb), (19.3 + HX, 15.1 + hb), (19.1 + HX + 0.7 * math.sin(2 * w - 1.2), 10.8 + hb)], 1.6, 1.2))
+    c.paint(BLUSH, ellipse(24.4 + HX, 9.6 + hb, 1.1, 0.65))
+    c.paint(DARK, ellipse(25.6 + HX, 12.1 + hb, 1.05, 1.5))
+    c.dot(HOLE, (25.3 + HX, 12.8 + hb))
+    c.paint(DARK, ellipse(29.4 + HX, 10.5 + hb, 1, 0.8))
 
 
 def cat_frame(c, t, stress):
+    HX, TX = -4.0, 3.5
     w = 2 * math.pi * t
     bob = 0.5 * math.sin(2 * w)
     hb = bob + 0.3 * math.sin(2 * w - 0.8)
     stretch = 0.6 * math.sin(w)
-    shoulder, hip = (19.5 + stretch, 5.5 + bob), (8.8 - stretch, 5.5 + bob)
+    shoulder, hip = (17.3 + stretch, 5.5 + bob), (9.8 - stretch, 5.5 + bob)
 
     def cat_leg(root, phase, hind):
         return gallop_leg(root, w, phase, hind, 0.85, 2.2, 2.5, 1.05, (1.2, 0.8))
@@ -268,31 +273,31 @@ def cat_frame(c, t, stress):
     c.paint(FAR, cat_leg((shoulder[0] - 1.2, shoulder[1]), 0.12, False))
     c.paint(FAR, cat_leg((hip[0] - 1.2, hip[1]), 0.62, True))
     # 길게 S자로 휘는 꼬리 + 줄무늬 꼬리 끝
-    tail_tip = (4 + 1.2 * math.sin(w), 15.5 + bob)
-    c.paint(BODY, curve([(7.5, 8 + bob), (2.5, 8.5 + bob), (1.8, 13 + bob), tail_tip], 1.2, 0.9))
+    tail_tip = (4 + TX + 1.2 * math.sin(w), 15.5 + bob)
+    c.paint(BODY, curve([(7.5 + TX, 8 + bob), (2.5 + TX, 8.5 + bob), (1.8 + TX, 13 + bob), tail_tip], 1.2, 0.9))
     c.paint(STRIPE, ellipse(tail_tip[0] - 0.2, tail_tip[1] - 0.4, 1.2, 1.2))
-    c.paint(BODY, ellipse(14, 7.2 + bob, 7 + stretch, 3.4, tilt=0.05 * math.sin(w)))
+    c.paint(BODY, ellipse(13.5, 7.2 + bob, 5.4 + stretch * 0.6, 3.4, tilt=0.05 * math.sin(w)))
     # 등 줄무늬
-    for sx in (10.5, 13.5, 16.5):
+    for sx in (11, 13.5, 16):
         c.paint(STRIPE, capsule((sx + stretch * 0.5, 10.2 + bob), (sx - 0.5 + stretch * 0.5, 8.9 + bob), 0.6))
-    c.paint(LIGHT, ellipse(19.4 + stretch, 5.6 + bob, 2.3, 1.6))
+    c.paint(LIGHT, ellipse(17.2 + stretch, 5.6 + bob, 2.1, 1.6))
     c.paint(BODY, cat_leg(shoulder, 0, False))
     c.paint(BODY, cat_leg(hip, 0.5, True))
     # 동그란 머리 + 뾰족 귀 (귀 안쪽은 밝게)
-    c.paint(BODY, ellipse(23.8, 10.8 + hb, 4.9, 4.3))
-    c.paint(BODY, triangle((20.3, 12.8 + hb), (21, 17.4 + hb), (23.6, 14.6 + hb)))
-    c.paint(BODY, triangle((24.2, 14.8 + hb), (26.6, 17.4 + hb), (27.4, 12.6 + hb)))
-    c.paint(LIGHT, triangle((21.4, 14 + hb), (21.6, 16.3 + hb), (22.8, 14.8 + hb)))
-    c.paint(LIGHT, triangle((25, 14.8 + hb), (26.3, 16.3 + hb), (26.5, 13.8 + hb)))
-    c.paint(STRIPE, capsule((23.4, 15.2 + hb), (23.4, 14 + hb), 0.5))
-    c.paint(LIGHT, ellipse(27, 8.6 + hb, 1.6, 1.1))
+    c.paint(BODY, ellipse(23.8 + HX, 10.8 + hb, 4.9, 4.3))
+    c.paint(BODY, triangle((20.3 + HX, 12.8 + hb), (21 + HX, 17.4 + hb), (23.6 + HX, 14.6 + hb)))
+    c.paint(BODY, triangle((24.2 + HX, 14.8 + hb), (26.6 + HX, 17.4 + hb), (27.4 + HX, 12.6 + hb)))
+    c.paint(LIGHT, triangle((21.4 + HX, 14 + hb), (21.6 + HX, 16.3 + hb), (22.8 + HX, 14.8 + hb)))
+    c.paint(LIGHT, triangle((25 + HX, 14.8 + hb), (26.3 + HX, 16.3 + hb), (26.5 + HX, 13.8 + hb)))
+    c.paint(STRIPE, capsule((23.4 + HX, 15.2 + hb), (23.4 + HX, 14 + hb), 0.5))
+    c.paint(LIGHT, ellipse(27 + HX, 8.6 + hb, 1.6, 1.1))
     if stress:
-        c.paint(TONGUE, capsule((27.3, 8 + hb), (27.2, 7.1 + hb), 0.65))
-    c.paint(BLUSH, ellipse(24.9, 9 + hb, 1.1, 0.65))
-    c.paint(DARK, ellipse(25.8, 11.3 + hb, 1.05, 1.6))
-    c.dot(HOLE, (25.5, 12 + hb))
-    c.paint(DARK, ellipse(28.4, 10 + hb, 0.6, 0.5))
-    c.paint(WHISKER, capsule((29, 9.4 + hb), (31.3, 9.9 + hb), 0.5), only_empty=True)
+        c.paint(TONGUE, capsule((27.3 + HX, 8 + hb), (27.2 + HX, 7.1 + hb), 0.65))
+    c.paint(BLUSH, ellipse(24.9 + HX, 9 + hb, 1.1, 0.65))
+    c.paint(DARK, ellipse(25.8 + HX, 11.3 + hb, 1.05, 1.6))
+    c.dot(HOLE, (25.5 + HX, 12 + hb))
+    c.paint(DARK, ellipse(28.4 + HX, 10 + hb, 0.6, 0.5))
+    c.paint(WHISKER, capsule((29 + HX, 9.4 + hb), (31.3 + HX, 9.9 + hb), 0.5), only_empty=True)
 
 
 def monkey_frame(c, t, stress):
@@ -364,20 +369,42 @@ def dancer_frame(c, t, stress):
             c.paint(WHISKER, capsule((hx + d * 5.2, 5.2), (hx + d * 6.3, 4.5), 0.45), only_empty=True)
 
 
-# id: (메뉴 이름, 설계 폭, 프레임 함수)
+# id: (메뉴 이름, 설계 상자, 프레임 함수)
 PETS = {
-    "dog": ("강아지", 32, dog_frame),
-    "cat": ("고양이", 32, cat_frame),
-    "monkey": ("원숭이 (머리 긁기)", 20, monkey_frame),
-    "dancer": ("엉덩이 춤", 20, dancer_frame),
+    "dog": ("강아지", (0, 0, 32, UNIT_H), dog_frame),
+    "cat": ("고양이", (0, 0, 32, UNIT_H), cat_frame),
+    "monkey": ("원숭이 (머리 긁기)", (0, 0, 20, UNIT_H), monkey_frame),
+    "dancer": ("엉덩이 춤", (0, 0, 20, UNIT_H), dancer_frame),
 }
+
+_fit_boxes = {}
+
+
+def fit_box(pet):
+    """모든 프레임(평소 + 바쁠 때)에서 실제로 칠해지는 범위를 재서, 아이콘을 꽉 채울 상자를 구함.
+    프레임마다 따로 맞추면 캐릭터가 출렁이니 전체 범위 하나로 맞춤."""
+    if pet not in _fit_boxes:
+        _, design, draw = PETS[pet]
+        n, xs, ys = 64, [], []
+        for stress in (False, True):
+            for i in range(FRAME_COUNT):
+                c = Canvas(n, design)
+                draw(c, i / FRAME_COUNT, stress)
+                for idx, ink in enumerate(c.ink):
+                    if ink != NONE:
+                        xs.append(idx % n)
+                        ys.append(idx // n)
+        c, m = Canvas(n, design), 0.2
+        _fit_boxes[pet] = (min(xs) / c.scale - c.ox - m, min(ys) / c.scale - c.oy - m,
+                           (max(xs) + 1) / c.scale - c.ox + m, (max(ys) + 1) / c.scale - c.oy + m)
+    return _fit_boxes[pet]
 
 
 def render_frames(pet, size, stress):
-    _, unit_w, draw = PETS[pet]
+    box, draw = fit_box(pet), PETS[pet][2]
     frames = []
     for i in range(FRAME_COUNT):
-        c = Canvas(size, unit_w)
+        c = Canvas(size, box)
         draw(c, i / FRAME_COUNT, stress)
         frames.append(c)
     return frames
@@ -397,7 +424,7 @@ def to_image(c, palette=None, mono=(0, 0, 0)):
     return img
 
 
-def write_preview(path, sizes=(16, 24, 32)):
+def write_preview(path, sizes=(16, 20, 24, 32)):
     """캐릭터 x [모노, 치즈, 초코+바쁠 때] 줄마다 8프레임, 크기별로 확대해서 한 장에 저장."""
     zoom, pad, cols = 6, 6, 8
     looks = [(None, False), ("cheese", False), ("choco", True)]
@@ -553,8 +580,17 @@ def set_autostart(enabled):
 
 
 def tray_icon_size():
-    """현재 화면 배율에 맞는 트레이 아이콘 크기 (100% 16px, 150% 24px, 200% 32px)."""
-    return ctypes.windll.user32.GetSystemMetrics(49) or 16  # SM_CXSMICON
+    """작업 표시줄이 있는 모니터의 배율에 맞는 트레이 아이콘 크기 (100% 16px, 125% 20px, 150% 24px, 200% 32px).
+    크기가 어긋나면 Windows가 그림을 늘리거나 줄여서 픽셀이 뭉개짐."""
+    user32 = ctypes.windll.user32
+    try:
+        user32.FindWindowW.restype = ctypes.c_void_p
+        user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
+        taskbar = user32.FindWindowW("Shell_TrayWnd", None)
+        dpi = user32.GetDpiForWindow(taskbar) if taskbar else user32.GetDpiForSystem()
+        return user32.GetSystemMetricsForDpi(49, dpi) or 16  # SM_CXSMICON
+    except AttributeError:  # Windows 10 1607 이전
+        return user32.GetSystemMetrics(49) or 16
 
 
 def make_hicon(img):
@@ -688,6 +724,12 @@ class App:
             time.sleep(1.5)
             for pet in self.pets:
                 pet.sample()
+            # 화면 배율을 바꾸면 그 크기에 맞춰 다시 그림
+            size = tray_icon_size()
+            if size != self.icon_size:
+                self.icon_size = size
+                for pet in self.pets:
+                    pet.rebuild()
 
     def quit(self):
         self.running = False
