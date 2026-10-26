@@ -27,7 +27,7 @@ UNIT_H = 18  # 캐릭터 설계 높이 (Mac 메뉴 바 기준 단위)
 
 # 픽셀마다 어떤 재질인지 기록해 두고, 이미지로 바꿀 때 팔레트(또는 모노 알파)로 색을 정함
 (NONE, FAR, BODY, LIGHT, EAR, STRIPE, BLUSH, DARK, HOLE, TONGUE, WHISKER, SWEAT,
- SKIN, SHIRT, PANTS, HAIR) = range(16)
+ SKIN, SHIRT, PANTS, HAIR, GREEN, JEANS, TAN, HELMET) = range(20)
 OPEN_INKS = (NONE, FAR, WHISKER, SWEAT)
 
 
@@ -103,8 +103,8 @@ class Canvas:
             return fixed[ink]
         if self.is_edge(x, y):
             return 1.0
-        return {LIGHT: 0.12, BLUSH: 0.22, STRIPE: 0.75, EAR: 0.95, HAIR: 0.95,
-                SKIN: 0.3, SHIRT: 0.7, PANTS: 0.15}.get(ink, 0.45)
+        return {LIGHT: 0.12, BLUSH: 0.22, STRIPE: 0.75, EAR: 0.95, HAIR: 0.95, SKIN: 0.3, SHIRT: 0.7,
+                PANTS: 0.15, GREEN: 0.55, JEANS: 0.8, TAN: 0.3, HELMET: 0.95}.get(ink, 0.45)
 
     def color(self, x, y, p):
         ink = self.at(x, y)
@@ -117,7 +117,8 @@ class Canvas:
         if self.is_edge(x, y):
             return p["outline"]
         return {LIGHT: p["light"], EAR: p["ear"], STRIPE: p["ear"], BLUSH: 0xFF94A8,
-                SKIN: 0xFFD9B8, SHIRT: 0xE8453C, PANTS: 0xFFD34D, HAIR: 0x2B1B12}.get(ink, p["fill"])
+                SKIN: 0xFFD9B8, SHIRT: 0xE8453C, PANTS: 0xFFD34D, HAIR: 0x2B1B12, GREEN: 0x1FA463,
+                JEANS: 0x3F5E8C, TAN: 0xF2C29C, HELMET: 0x232838}.get(ink, p["fill"])
 
 
 # MARK: - 색
@@ -369,12 +370,115 @@ def dancer_frame(c, t, stress):
             c.paint(WHISKER, capsule((hx + d * 5.2, 5.2), (hx + d * 6.3, 4.5), 0.45), only_empty=True)
 
 
+# 상동호수공원 밈(감스트) 캐릭터 두 가지. 공통: 청록 티셔츠 + 가슴 패치, 남색 반모 헬멧 + 검정 턱끈.
+# 바쁠수록 볼살·턱살이 더 빨리 덜덜 떨림
+
+def scooter_frame(c, t, stress):
+    """A. 스쿠터 타고 가는 옆모습. 스쿠터는 바퀴만 돌고, 큰 얼굴의 볼살이 떨림. 색상 메뉴는 스쿠터 차체 색."""
+    w = 2 * math.pi * t
+    amp = 0.75 if stress else 0.5
+    r = 0.15 * math.sin(4 * w)            # 몸은 살짝만 출렁
+    cheek = amp * math.sin(4 * w + 0.8)   # 볼살은 한 박자 늦게
+    jowl = amp * math.sin(4 * w + 1.8)    # 턱살은 한 박자 더 늦게
+    spin = -w
+
+    # 배기 연기: 두 덩이가 번갈아 뒤로 퍼짐
+    for k in range(2):
+        p = (t * 2 + k / 2) % 1
+        c.paint(LIGHT, ellipse(5.6 - 4 * p, 3.2 + 2.4 * p, 0.6 + 0.8 * p, 0.6 + 0.8 * p), new_part=True)
+    # 바퀴: 타이어 + 휠 + 돌아가는 바큇살
+    for wx in (9.0, 21.5):
+        c.paint(HAIR, ellipse(wx, 2.6, 2.6, 2.6), new_part=True)
+        c.paint(LIGHT, ellipse(wx, 2.6, 1.4, 1.4))
+        for a in (spin, spin + math.pi / 2):
+            c.paint(HAIR, capsule((wx - math.cos(a) * 1.4, 2.6 - math.sin(a) * 1.4), (wx + math.cos(a) * 1.4, 2.6 + math.sin(a) * 1.4), 0.35))
+    # 앞 포크 → 뒤 카울과 발판 → 안장
+    c.paint(HAIR, capsule((21.5, 2.6), (20.2, 9.5), 0.6), new_part=True)
+    c.paint(BODY, ellipse(11, 5.8, 4.6, 2.3))
+    c.paint(BODY, capsule((13, 4.4), (18, 4.4), 0.9))
+    c.paint(HAIR, capsule((8.6, 8.3), (13, 8.3), 0.8), new_part=True)
+    # 청바지 다리 + 신발
+    c.paint(JEANS, union(capsule((12, 8.9 + r), (15.4, 8.8), 1.4), capsule((15.4, 8.8), (16, 5.4), 1.25)), new_part=True)
+    c.paint(HAIR, ellipse(16.9, 5, 1.4, 0.8), new_part=True)
+    # 앞 가림막 + 헤드라이트 + 핸들
+    c.paint(BODY, capsule((18.6, 4.4), (19.8, 9.2), 1.4))
+    c.paint(LIGHT, ellipse(21.2, 9, 0.7, 0.9))
+    c.paint(HAIR, capsule((18.6, 10.6), (20.8, 10.4), 0.55), new_part=True)
+    # 통통한 몸통 + 핸들 잡은 팔
+    c.paint(GREEN, ellipse(11.4, 9.8 + r, 3.4, 2.5, tilt=-0.1), new_part=True)
+    c.paint(SHIRT, ellipse(13.6, 9.6 + r, 0.7, 0.7))
+    c.paint(GREEN, capsule((13.4, 10.8 + r), (15, 10.6 + r), 1.1), new_part=True)
+    c.paint(TAN, union(capsule((15, 10.6 + r), (18.8, 10.6), 0.95), ellipse(19, 10.6, 1.15, 1.05)), new_part=True)
+    # 큰 얼굴 + 떨리는 볼살·턱살 + 남색 반모 헬멧 + 검정 턱끈
+    c.paint(TAN, ellipse(12.8, 13.8 + r, 4.1, 3.6), new_part=True)
+    c.paint(TAN, ellipse(13.6, 10.9 + r + jowl * 0.6, 2.6, 1.3), new_part=True)
+    c.paint(TAN, ellipse(15.3, 12 + r + cheek, 1.6, 1.4), new_part=True)
+    c.paint(BLUSH, ellipse(15.3, 12 + r + cheek, 0.8, 0.5))
+    c.paint(HELMET, ellipse(12.2, 16.5 + r, 4.4, 1.4))
+    c.paint(HELMET, capsule((10, 15.3 + r), (10.8, 11.6 + r + jowl * 0.6), 0.4))
+    c.paint(DARK, ellipse(15.7, 14.3 + r, 0.55, 0.8))
+    c.paint(DARK, ellipse(16.6, 12.9 + r + cheek * 0.5, 0.45, 0.4))
+    if stress:
+        # 바람 가르는 효과선
+        for y in (11.0, 14.0):
+            c.paint(WHISKER, capsule((1.5, y), (5, y), 0.45), only_empty=True)
+
+
+def face_frame(c, t, stress):
+    """B. 영상처럼 셀카 시점의 얼굴 클로즈업: 남색 반모 헬멧(검정 턱끈, 왼쪽 빨간 버클), 청록 티셔츠와 가슴 패치,
+    통통한 볼과 이중턱, 가는 눈, 뾰로통 내민 입. 양 볼살과 턱살이 엇갈려 덜덜 떨림."""
+    w = 2 * math.pi * t
+    amp = 0.8 if stress else 0.5
+    head = 0.15 * math.sin(4 * w)
+    left = amp * math.sin(4 * w + 0.6)
+    right = amp * math.sin(4 * w + 0.6 + math.pi)  # 양 볼이 엇갈려 출렁
+    chin = amp * math.sin(4 * w + 1.6)
+    chin2 = amp * math.sin(4 * w + 2.4)            # 이중턱은 한 박자 더 늦게
+    pout = abs(math.sin(2 * w))                    # 입술을 쭉 내밀었다 오므렸다
+
+    # 어깨: 청록 티셔츠 + 왼쪽 가슴 캐릭터 패치
+    c.paint(GREEN, ellipse(10, 0, 9.6, 4.4), new_part=True)
+    c.paint(LIGHT, ellipse(5.8, 2, 1.1, 1), new_part=True)
+    c.paint(SHIRT, ellipse(5.8, 1.8, 0.5, 0.45))
+    # 통통한 얼굴 (넓고 둥글게)
+    c.paint(TAN, ellipse(10, 10 + head, 6.7, 5.2), new_part=True)
+    # 검정 턱끈: 볼살 뒤로 지나가서 관자놀이와 턱 밑에만 보임
+    c.paint(HELMET, capsule((3.8, 12.8 + head), (7, 3.8 + head + chin), 0.45))
+    c.paint(HELMET, capsule((16.2, 12.8 + head), (13, 3.8 + head + chin), 0.45))
+    # 처진 양 볼살 → 턱살 → 이중턱 (볼과 이중턱은 테두리가 생겨서 살 접힘처럼 보임)
+    c.paint(TAN, ellipse(4.9, 7.6 + head + left, 2.7, 2.3), new_part=True)
+    c.paint(TAN, ellipse(15.1, 7.6 + head + right, 2.7, 2.3), new_part=True)
+    c.paint(TAN, ellipse(10, 5.4 + head + chin, 4, 1.8))
+    c.paint(TAN, ellipse(10, 3.6 + head + chin2, 3.2, 1.2), new_part=True)
+    c.paint(BLUSH, ellipse(5.2, 8.2 + head + left, 1, 0.55))
+    c.paint(BLUSH, ellipse(14.8, 8.2 + head + right, 1, 0.55))
+    # 왼쪽 턱 아래 빨간 버클
+    c.paint(SHIRT, ellipse(6.3, 4.4 + head + chin, 0.8, 0.7), new_part=True)
+    # 남색 반모 헬멧: 이마 위만 덮음 + 반짝이
+    helmet_y, dome = 12.8 + head, ellipse(10, 13.8 + head, 7.2, 4.2)
+    c.paint(HELMET, Shape(lambda x, y: y > helmet_y and dome.test(x, y), dome.bbox), new_part=True)
+    c.paint(LIGHT, ellipse(6.8, 16.2 + head, 1, 0.6))
+    # 가는 눈
+    for ex in (7.4, 12.6):
+        c.paint(DARK, capsule((ex - 0.8, 10.2 + head), (ex + 0.8, 10.2 + head), 0.45))
+    # 뾰로통 내민 입술 (테두리 없이 분홍 + 가운데 작게 벌린 입)
+    mouth_y = 7.8 + head + chin * 0.3
+    c.paint(BLUSH, ellipse(10, mouth_y, 0.9 + 0.3 * pout, 0.6))
+    c.paint(DARK, ellipse(10, mouth_y, 0.6, 0.45 + 0.15 * pout))
+    if stress:
+        # 바람에 날리는 효과선
+        for x0, y in ((0.3, 13.0), (0.5, 10.0), (17.4, 13.0), (17.2, 10.0)):
+            c.paint(WHISKER, capsule((x0, y), (x0 + 2.2, y), 0.45), only_empty=True)
+
+
 # id: (메뉴 이름, 설계 상자, 프레임 함수)
 PETS = {
     "dog": ("강아지", (0, 0, 32, UNIT_H), dog_frame),
     "cat": ("고양이", (0, 0, 32, UNIT_H), cat_frame),
     "monkey": ("원숭이 (머리 긁기)", (0, 0, 20, UNIT_H), monkey_frame),
     "dancer": ("엉덩이 춤", (0, 0, 20, UNIT_H), dancer_frame),
+    "scooter": ("상동호수공원 (스쿠터)", (0, 0, 32, UNIT_H), scooter_frame),
+    "face": ("상동호수공원 (얼굴)", (0, 0, 20, UNIT_H), face_frame),
 }
 
 _fit_boxes = {}

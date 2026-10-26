@@ -12,7 +12,7 @@ let frameCount = 16
 // 픽셀마다 어떤 재질인지 기록해 두고, 이미지로 바꿀 때 팔레트(또는 모노 알파)로 색을 정함
 enum Ink: UInt8 {
     case none, far, body, light, ear, stripe, blush, dark, hole, tongue, whisker, sweat
-    case skin, shirt, pants, hair
+    case skin, shirt, pants, hair, green, jeans, tan, helmet
 }
 
 struct P {
@@ -88,6 +88,10 @@ struct Canvas {
             case .stripe: return 0.75
             case .ear, .hair: return 0.95
             case .skin: return 0.3
+            case .green: return 0.55
+            case .tan: return 0.3
+            case .helmet: return 0.95
+            case .jeans: return 0.8
             case .shirt: return 0.7
             case .pants: return 0.15
             default: return 0.45
@@ -112,6 +116,10 @@ struct Canvas {
             case .ear, .stripe: return p.ear
             case .blush: return RGB(0xFF94A8)
             case .skin: return RGB(0xFFD9B8)
+            case .green: return RGB(0x1FA463)
+            case .tan: return RGB(0xF2C29C)
+            case .helmet: return RGB(0x232838)
+            case .jeans: return RGB(0x3F5E8C)
             case .shirt: return RGB(0xE8453C)
             case .pants: return RGB(0xFFD34D)
             case .hair: return RGB(0x2B1B12)
@@ -373,8 +381,121 @@ func dancerFrame(_ t: Double, stress: Bool) -> Canvas {
     return c
 }
 
+// 상동호수공원 밈(감스트) 캐릭터 두 가지. 공통: 청록 티셔츠 + 가슴 패치, 남색 반모 헬멧 + 검정 턱끈.
+// 바쁠수록 볼살·턱살이 더 빨리 덜덜 떨림
+
+// A. 스쿠터 타고 가는 옆모습. 스쿠터는 바퀴만 돌고, 큰 얼굴의 볼살이 떨림. 색상 메뉴는 스쿠터 차체 색
+func scooterFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t
+    let amp = stress ? 0.75 : 0.5
+    let r = 0.15 * sin(4 * w)                 // 몸은 살짝만 출렁
+    let cheek = amp * sin(4 * w + 0.8)        // 볼살은 한 박자 늦게
+    let jowl = amp * sin(4 * w + 1.8)         // 턱살은 한 박자 더 늦게
+    let spin = -w
+
+    var c = Canvas(w: 32)
+    // 배기 연기: 두 덩이가 번갈아 뒤로 퍼짐
+    for k in 0..<2 {
+        let p = (t * 2 + Double(k) / 2).truncatingRemainder(dividingBy: 1)
+        c.paint(.light, newPart: true, ellipse(5.6 - 4 * p, 3.2 + 2.4 * p, 0.6 + 0.8 * p, 0.6 + 0.8 * p))
+    }
+    // 바퀴: 타이어 + 휠 + 돌아가는 바큇살
+    for wx in [9.0, 21.5] {
+        c.paint(.hair, newPart: true, ellipse(wx, 2.6, 2.6, 2.6))
+        c.paint(.light, ellipse(wx, 2.6, 1.4, 1.4))
+        for a in [spin, spin + .pi / 2] {
+            c.paint(.hair, capsule(P(wx - cos(a) * 1.4, 2.6 - sin(a) * 1.4), P(wx + cos(a) * 1.4, 2.6 + sin(a) * 1.4), 0.35))
+        }
+    }
+    // 앞 포크 → 뒤 카울과 발판 → 안장
+    c.paint(.hair, newPart: true, capsule(P(21.5, 2.6), P(20.2, 9.5), 0.6))
+    c.paint(.body, ellipse(11, 5.8, 4.6, 2.3))
+    c.paint(.body, capsule(P(13, 4.4), P(18, 4.4), 0.9))
+    c.paint(.hair, newPart: true, capsule(P(8.6, 8.3), P(13, 8.3), 0.8))
+    // 청바지 다리 + 신발
+    c.paint(.jeans, newPart: true, union([capsule(P(12, 8.9 + r), P(15.4, 8.8), 1.4), capsule(P(15.4, 8.8), P(16, 5.4), 1.25)]))
+    c.paint(.hair, newPart: true, ellipse(16.9, 5, 1.4, 0.8))
+    // 앞 가림막 + 헤드라이트 + 핸들
+    c.paint(.body, capsule(P(18.6, 4.4), P(19.8, 9.2), 1.4))
+    c.paint(.light, ellipse(21.2, 9, 0.7, 0.9))
+    c.paint(.hair, newPart: true, capsule(P(18.6, 10.6), P(20.8, 10.4), 0.55))
+    // 통통한 몸통 + 핸들 잡은 팔
+    c.paint(.green, newPart: true, ellipse(11.4, 9.8 + r, 3.4, 2.5, tilt: -0.1))
+    c.paint(.shirt, ellipse(13.6, 9.6 + r, 0.7, 0.7))
+    c.paint(.green, newPart: true, capsule(P(13.4, 10.8 + r), P(15, 10.6 + r), 1.1))
+    c.paint(.tan, newPart: true, union([capsule(P(15, 10.6 + r), P(18.8, 10.6), 0.95), ellipse(19, 10.6, 1.15, 1.05)]))
+    // 큰 얼굴 + 떨리는 볼살·턱살 + 남색 반모 헬멧 + 검정 턱끈
+    c.paint(.tan, newPart: true, ellipse(12.8, 13.8 + r, 4.1, 3.6))
+    c.paint(.tan, newPart: true, ellipse(13.6, 10.9 + r + jowl * 0.6, 2.6, 1.3))
+    c.paint(.tan, newPart: true, ellipse(15.3, 12 + r + cheek, 1.6, 1.4))
+    c.paint(.blush, ellipse(15.3, 12 + r + cheek, 0.8, 0.5))
+    c.paint(.helmet, ellipse(12.2, 16.5 + r, 4.4, 1.4))
+    c.paint(.helmet, capsule(P(10, 15.3 + r), P(10.8, 11.6 + r + jowl * 0.6), 0.4))
+    c.paint(.dark, ellipse(15.7, 14.3 + r, 0.55, 0.8))
+    c.paint(.dark, ellipse(16.6, 12.9 + r + cheek * 0.5, 0.45, 0.4))
+    if stress {
+        // 바람 가르는 효과선
+        for y in [11.0, 14.0] {
+            c.paint(.whisker, onlyEmpty: true, capsule(P(1.5, y), P(5, y), 0.45))
+        }
+    }
+    return c
+}
+
+// B. 영상처럼 셀카 시점의 얼굴 클로즈업: 남색 반모 헬멧(검정 턱끈, 왼쪽 빨간 버클), 청록 티셔츠와 가슴 패치,
+// 통통한 볼과 이중턱, 가는 눈, 뾰로통 내민 입. 양 볼살과 턱살이 엇갈려 덜덜 떨림
+func faceFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t
+    let amp = stress ? 0.8 : 0.5
+    let head = 0.15 * sin(4 * w)
+    let left = amp * sin(4 * w + 0.6)
+    let right = amp * sin(4 * w + 0.6 + .pi)  // 양 볼이 엇갈려 출렁
+    let chin = amp * sin(4 * w + 1.6)
+    let chin2 = amp * sin(4 * w + 2.4)         // 이중턱은 한 박자 더 늦게
+    let pout = abs(sin(2 * w))                 // 입술을 쭉 내밀었다 오므렸다
+
+    var c = Canvas(w: 20)
+    // 어깨: 청록 티셔츠 + 왼쪽 가슴 캐릭터 패치
+    c.paint(.green, newPart: true, ellipse(10, 0, 9.6, 4.4))
+    c.paint(.light, newPart: true, ellipse(5.8, 2, 1.1, 1))
+    c.paint(.shirt, ellipse(5.8, 1.8, 0.5, 0.45))
+    // 통통한 얼굴 (넓고 둥글게)
+    c.paint(.tan, newPart: true, ellipse(10, 10 + head, 6.7, 5.2))
+    // 검정 턱끈: 볼살 뒤로 지나가서 관자놀이와 턱 밑에만 보임
+    c.paint(.helmet, capsule(P(3.8, 12.8 + head), P(7, 3.8 + head + chin), 0.45))
+    c.paint(.helmet, capsule(P(16.2, 12.8 + head), P(13, 3.8 + head + chin), 0.45))
+    // 처진 양 볼살 → 턱살 → 이중턱 (볼과 이중턱은 테두리가 생겨서 살 접힘처럼 보임)
+    c.paint(.tan, newPart: true, ellipse(4.9, 7.6 + head + left, 2.7, 2.3))
+    c.paint(.tan, newPart: true, ellipse(15.1, 7.6 + head + right, 2.7, 2.3))
+    c.paint(.tan, ellipse(10, 5.4 + head + chin, 4, 1.8))
+    c.paint(.tan, newPart: true, ellipse(10, 3.6 + head + chin2, 3.2, 1.2))
+    c.paint(.blush, ellipse(5.2, 8.2 + head + left, 1, 0.55))
+    c.paint(.blush, ellipse(14.8, 8.2 + head + right, 1, 0.55))
+    // 왼쪽 턱 아래 빨간 버클
+    c.paint(.shirt, newPart: true, ellipse(6.3, 4.4 + head + chin, 0.8, 0.7))
+    // 남색 반모 헬멧: 이마 위만 덮음 + 반짝이
+    let helmetY = 12.8 + head
+    c.paint(.helmet, newPart: true, { x, y in y > helmetY && ellipse(10, 13.8 + head, 7.2, 4.2)(x, y) })
+    c.paint(.light, ellipse(6.8, 16.2 + head, 1, 0.6))
+    // 가는 눈
+    for ex in [7.4, 12.6] {
+        c.paint(.dark, capsule(P(ex - 0.8, 10.2 + head), P(ex + 0.8, 10.2 + head), 0.45))
+    }
+    // 뾰로통 내민 입술 (테두리 없이 분홍 + 가운데 작게 벌린 입)
+    let mouthY = 7.8 + head + chin * 0.3
+    c.paint(.blush, ellipse(10, mouthY, 0.9 + 0.3 * pout, 0.6))
+    c.paint(.dark, ellipse(10, mouthY, 0.6, 0.45 + 0.15 * pout))
+    if stress {
+        // 바람에 날리는 효과선
+        for (x0, y) in [(0.3, 13.0), (0.5, 10.0), (17.4, 13.0), (17.2, 10.0)] {
+            c.paint(.whisker, onlyEmpty: true, capsule(P(x0, y), P(x0 + 2.2, y), 0.45))
+        }
+    }
+    return c
+}
+
 enum Pet: String, CaseIterable {
-    case dog, cat, monkey, dancer
+    case dog, cat, monkey, dancer, scooter, face
 
     var title: String {
         switch self {
@@ -382,6 +503,8 @@ enum Pet: String, CaseIterable {
         case .cat: return "고양이"
         case .monkey: return "원숭이 (머리 긁기)"
         case .dancer: return "엉덩이 춤"
+        case .scooter: return "상동호수공원 (스쿠터)"
+        case .face: return "상동호수공원 (얼굴)"
         }
     }
 
@@ -393,6 +516,8 @@ enum Pet: String, CaseIterable {
             case .cat: return catFrame(t, stress: stress)
             case .monkey: return monkeyFrame(t, stress: stress)
             case .dancer: return dancerFrame(t, stress: stress)
+            case .scooter: return scooterFrame(t, stress: stress)
+            case .face: return faceFrame(t, stress: stress)
             }
         }
     }
