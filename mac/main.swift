@@ -234,20 +234,20 @@ func dogFrame(_ t: Double, stress: Bool) -> Canvas {
     let bob = 0.6 * sin(2 * w)
     let hb = bob + 0.4 * sin(2 * w - 0.8)
     let wag = 0.9 * sin(2 * w)
-    let shoulder = P(19.5, 5.6 + bob), hip = P(9.5, 5.6 + bob)
+    let shoulder = P(19.5, 6.2 + bob), hip = P(9.5, 6.2 + bob)
     func dogLeg(_ root: P, _ phase: Double, hind: Bool) -> Shape {
-        gallopLeg(root, w, phase: phase, hind: hind, amp: 0.7, upper: 2.2, lower: 2.3, r: 1.3, paw: (1.5, 1))
+        gallopLeg(root, w, phase: phase, hind: hind, amp: 0.9, upper: 2.6, lower: 2.6, r: 1.1, paw: (1.4, 0.9))
     }
 
     var c = Canvas(w: 32)
-    c.paint(.far, dogLeg(P(shoulder.x - 1.2, shoulder.y), 0.12, hind: false))
-    c.paint(.far, dogLeg(P(hip.x - 1.2, hip.y), 0.62, hind: true))
+    c.paint(.far, dogLeg(P(shoulder.x - 1.4, shoulder.y), 0.2, hind: false))
+    c.paint(.far, dogLeg(P(hip.x - 1.4, hip.y), 0.7, hind: true))
     let tailTip = P(5.5 + wag, 14.5 + bob)
     c.paint(.body, curve([P(8, 9 + bob), P(5, 10.5 + bob), tailTip], from: 1.4, to: 1))
     c.paint(.light, ellipse(tailTip.x, tailTip.y - 0.3, 1.2, 1.2))
     // 동글동글한 몸통 + 밝은 가슴털
-    c.paint(.body, ellipse(14.5, 7.4 + bob, 6.6, 4, tilt: 0.05 * sin(w)))
-    c.paint(.light, ellipse(19.2, 6 + bob, 2.4, 1.8))
+    c.paint(.body, ellipse(14.5, 7.9 + bob, 6.6, 3.5, tilt: 0.05 * sin(w)))
+    c.paint(.light, ellipse(19.2, 6.6 + bob, 2.4, 1.6))
     c.paint(.body, dogLeg(shoulder, 0, hind: false))
     c.paint(.body, dogLeg(hip, 0.5, hind: true))
     // 큰 머리 + 밝은 주둥이
@@ -270,24 +270,24 @@ func catFrame(_ t: Double, stress: Bool) -> Canvas {
     let bob = 0.5 * sin(2 * w)
     let hb = bob + 0.3 * sin(2 * w - 0.8)
     let stretch = 0.6 * sin(w)
-    let shoulder = P(19.5 + stretch, 5.5 + bob), hip = P(8.8 - stretch, 5.5 + bob)
+    let shoulder = P(19.5 + stretch, 6 + bob), hip = P(8.8 - stretch, 6 + bob)
     func catLeg(_ root: P, _ phase: Double, hind: Bool) -> Shape {
-        gallopLeg(root, w, phase: phase, hind: hind, amp: 0.85, upper: 2.2, lower: 2.5, r: 1.05, paw: (1.2, 0.8))
+        gallopLeg(root, w, phase: phase, hind: hind, amp: 1, upper: 2.5, lower: 2.7, r: 0.95, paw: (1.2, 0.8))
     }
 
     var c = Canvas(w: 32)
-    c.paint(.far, catLeg(P(shoulder.x - 1.2, shoulder.y), 0.12, hind: false))
-    c.paint(.far, catLeg(P(hip.x - 1.2, hip.y), 0.62, hind: true))
+    c.paint(.far, catLeg(P(shoulder.x - 1.4, shoulder.y), 0.2, hind: false))
+    c.paint(.far, catLeg(P(hip.x - 1.4, hip.y), 0.7, hind: true))
     // 길게 S자로 휘는 꼬리 + 줄무늬 꼬리 끝
     let tailTip = P(4 + 1.2 * sin(w), 15.5 + bob)
     c.paint(.body, curve([P(7.5, 8 + bob), P(2.5, 8.5 + bob), P(1.8, 13 + bob), tailTip], from: 1.2, to: 0.9))
     c.paint(.stripe, ellipse(tailTip.x - 0.2, tailTip.y - 0.4, 1.2, 1.2))
-    c.paint(.body, ellipse(14, 7.2 + bob, 7 + stretch, 3.4, tilt: 0.05 * sin(w)))
+    c.paint(.body, ellipse(14, 7.6 + bob, 7 + stretch, 3.1, tilt: 0.05 * sin(w)))
     // 등 줄무늬
     for sx in [10.5, 13.5, 16.5] {
         c.paint(.stripe, capsule(P(sx + stretch * 0.5, 10.2 + bob), P(sx - 0.5 + stretch * 0.5, 8.9 + bob), 0.6))
     }
-    c.paint(.light, ellipse(19.4 + stretch, 5.6 + bob, 2.3, 1.6))
+    c.paint(.light, ellipse(19.4 + stretch, 6.2 + bob, 2.3, 1.4))
     c.paint(.body, catLeg(shoulder, 0, hind: false))
     c.paint(.body, catLeg(hip, 0.5, hind: true))
     // 동그란 머리 + 뾰족 귀 (귀 안쪽은 밝게)
@@ -510,13 +510,53 @@ func faceFrame(_ t: Double, stress: Bool) -> Canvas {
     return c
 }
 
+// 옛날 택시 미터기 화면에서 달리던 말. 다리가 길쭉해서 네 발이 하나씩 따로 보이는 갤럽
+func horseFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t
+    let bob = 0.5 * sin(2 * w)
+    let hb = bob + 0.4 * sin(2 * w - 1)
+    let flow = sin(2 * w - 1.5)
+    let shoulder = P(20, 7.4 + bob), hip = P(10.2, 7.6 + bob)
+    func horseLeg(_ root: P, _ phase: Double, hind: Bool) -> Shape {
+        gallopLeg(root, w, phase: phase, hind: hind, amp: 0.8, upper: 3, lower: 3.1, r: 0.9, paw: (0.95, 0.65))
+    }
+
+    var c = Canvas(w: 32)
+    if stress {
+        // 뒷발에서 날리는 흙먼지
+        for k in 0..<2 {
+            let p = (t * 2 + Double(k) / 2).truncatingRemainder(dividingBy: 1)
+            c.paint(.light, newPart: true, ellipse(4.5 - 3.5 * p, 1.2 + 1.8 * p, 0.5 + 0.7 * p, 0.5 + 0.7 * p))
+        }
+    }
+    c.paint(.far, horseLeg(P(shoulder.x - 1.4, shoulder.y), 0.2, hind: false))
+    c.paint(.far, horseLeg(P(hip.x - 1.4, hip.y), 0.7, hind: true))
+    // 휘날리는 꼬리
+    c.paint(.ear, newPart: true, curve([P(7, 10.4 + bob), P(4, 11 + bob + 0.4 * flow), P(1.5, 8.6 + bob + flow)], from: 1.2, to: 0.7))
+    // 둥근 엉덩이 + 몸통 + 가슴
+    c.paint(.body, union([ellipse(10.6, 9.5 + bob, 3.7, 3.1), ellipse(15, 9.4 + bob, 6.4, 2.8), ellipse(19.6, 9.2 + bob, 3.1, 3)]))
+    c.paint(.body, horseLeg(shoulder, 0, hind: false))
+    c.paint(.body, horseLeg(hip, 0.5, hind: true))
+    // 굵은 목 + 길쭉한 머리 + 쫑긋한 귀
+    c.paint(.body, curve([P(19.6, 9.8 + bob), P(21.8, 12.3 + hb), P(23.6, 13.9 + hb)], from: 2.3, to: 1.7))
+    c.paint(.body, union([capsule(P(24, 14.2 + hb), P(28, 12 + hb), 1.6), ellipse(28.3, 11.9 + hb, 1.8, 1.45),
+                          triangle(P(22.9, 14.8 + hb), P(23.4, 17.2 + hb), P(24.7, 15.3 + hb))]))
+    // 바람에 날리는 갈기
+    c.paint(.ear, curve([P(23.6, 15.6 + hb), P(21.2, 14.4 + hb + 0.4 * flow), P(18.4, 11.8 + bob + 0.6 * flow)], from: 1.2, to: 0.8))
+    c.paint(.dark, ellipse(25.5, 13.9 + hb, 0.75, 1))
+    c.dot(.hole, P(25.3, 14.4 + hb))
+    c.paint(.dark, ellipse(29.5, 12.2 + hb, 0.45, 0.45))
+    return c
+}
+
 enum Pet: String, CaseIterable {
-    case dog, cat, monkey, dancer, scooter, face
+    case dog, cat, horse, monkey, dancer, scooter, face
 
     var title: String {
         switch self {
         case .dog: return "강아지"
         case .cat: return "고양이"
+        case .horse: return "택시 미터기 말"
         case .monkey: return "원숭이 (머리 긁기)"
         case .dancer: return "엉덩이 춤"
         case .scooter: return "상동호수공원 (스쿠터)"
@@ -530,6 +570,7 @@ enum Pet: String, CaseIterable {
             switch self {
             case .dog: return dogFrame(t, stress: stress)
             case .cat: return catFrame(t, stress: stress)
+            case .horse: return horseFrame(t, stress: stress)
             case .monkey: return monkeyFrame(t, stress: stress)
             case .dancer: return dancerFrame(t, stress: stress)
             case .scooter: return scooterFrame(t, stress: stress)
@@ -683,7 +724,7 @@ final class PetItem: NSObject, NSMenuDelegate {
     private var appearanceObservation: NSKeyValueObservation?
     // [평소, 바쁠 때]
     private var frames: [[CGImage]] = []
-    private var framePosition = 0.0
+    private var frameIndex = 0
     private var usage = 0.0
     private var speed = 0.0
 
@@ -809,18 +850,20 @@ final class PetItem: NSObject, NSMenuDelegate {
         layoutAnimationLayer()
     }
 
-    // 사용률이 높을수록 한 바퀴(16프레임) 도는 시간이 짧아짐: 0% 1.6초 → 100% 약 0.12초.
-    // 속도는 서서히 따라가고, 너무 빠르면 초당 24장으로 제한하고 프레임을 건너뜀
+    // 사용률이 높을수록 한 바퀴(16프레임) 도는 시간이 짧아짐: 0% 1.6초 → 100% 약 0.27초.
+    // 초당 30장을 넘으면 매번 같은 칸 수(정수)만큼 건너뜀. 칸 수가 들쭉날쭉하거나
+    // 한 번에 너무 많이 건너뛰면 다리가 순간이동하는 것처럼 보여서 최고 속도도 여기에 맞춤
     private func tick() {
-        let cycle = 1.6 / (1 + speed / 8)
-        let interval = max(1.0 / 24, cycle / Double(frameCount))
+        let cycle = 1.6 / (1 + speed / 20)
+        let step = max(1, Int((1.0 / 30 * Double(frameCount) / cycle).rounded(.up)))
+        let interval = cycle / Double(frameCount) * Double(step)
         speed += (usage - speed) * min(1, interval * 2)
-        framePosition = (framePosition + interval / cycle * Double(frameCount)).truncatingRemainder(dividingBy: Double(frameCount))
+        frameIndex = (frameIndex + step) % frameCount
         // 40% 이상이면 바쁜 버전 (혀 내밀기, 땀, 효과선)
         let set = speed > 40 ? frames[1] : frames[0]
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        animationLayer.contents = set[Int(framePosition.rounded()) % frameCount]
+        animationLayer.contents = set[frameIndex]
         CATransaction.commit()
 
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.tick() }

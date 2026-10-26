@@ -248,19 +248,19 @@ def dog_frame(c, t, stress):
     bob = 0.6 * math.sin(2 * w)
     hb = bob + 0.4 * math.sin(2 * w - 0.8)
     wag = 0.9 * math.sin(2 * w)
-    shoulder, hip = (17.0, 5.6 + bob), (10.5, 5.6 + bob)
+    shoulder, hip = (17.0, 6.2 + bob), (10.5, 6.2 + bob)
 
     def dog_leg(root, phase, hind):
-        return gallop_leg(root, w, phase, hind, 0.7, 2.2, 2.3, 1.3, (1.5, 1))
+        return gallop_leg(root, w, phase, hind, 0.9, 2.6, 2.6, 1.1, (1.4, 0.9))
 
-    c.paint(FAR, dog_leg((shoulder[0] - 1.2, shoulder[1]), 0.12, False))
-    c.paint(FAR, dog_leg((hip[0] - 1.2, hip[1]), 0.62, True))
+    c.paint(FAR, dog_leg((shoulder[0] - 1.4, shoulder[1]), 0.2, False))
+    c.paint(FAR, dog_leg((hip[0] - 1.4, hip[1]), 0.7, True))
     tail_tip = (5.5 + TX + wag, 14.5 + bob)
     c.paint(BODY, curve([(8 + TX, 9 + bob), (5 + TX, 10.5 + bob), tail_tip], 1.4, 1))
     c.paint(LIGHT, ellipse(tail_tip[0], tail_tip[1] - 0.3, 1.2, 1.2))
     # 동글동글한 몸통 + 밝은 가슴털
-    c.paint(BODY, ellipse(13.7, 7.4 + bob, 5.2, 4, tilt=0.05 * math.sin(w)))
-    c.paint(LIGHT, ellipse(17, 6 + bob, 2.2, 1.8))
+    c.paint(BODY, ellipse(13.7, 7.9 + bob, 5.2, 3.5, tilt=0.05 * math.sin(w)))
+    c.paint(LIGHT, ellipse(17, 6.6 + bob, 2.2, 1.6))
     c.paint(BODY, dog_leg(shoulder, 0, False))
     c.paint(BODY, dog_leg(hip, 0.5, True))
     # 큰 머리 + 밝은 주둥이
@@ -282,22 +282,22 @@ def cat_frame(c, t, stress):
     bob = 0.5 * math.sin(2 * w)
     hb = bob + 0.3 * math.sin(2 * w - 0.8)
     stretch = 0.6 * math.sin(w)
-    shoulder, hip = (17.3 + stretch, 5.5 + bob), (9.8 - stretch, 5.5 + bob)
+    shoulder, hip = (17.3 + stretch, 6 + bob), (9.8 - stretch, 6 + bob)
 
     def cat_leg(root, phase, hind):
-        return gallop_leg(root, w, phase, hind, 0.85, 2.2, 2.5, 1.05, (1.2, 0.8))
+        return gallop_leg(root, w, phase, hind, 1, 2.5, 2.7, 0.95, (1.2, 0.8))
 
-    c.paint(FAR, cat_leg((shoulder[0] - 1.2, shoulder[1]), 0.12, False))
-    c.paint(FAR, cat_leg((hip[0] - 1.2, hip[1]), 0.62, True))
+    c.paint(FAR, cat_leg((shoulder[0] - 1.4, shoulder[1]), 0.2, False))
+    c.paint(FAR, cat_leg((hip[0] - 1.4, hip[1]), 0.7, True))
     # 길게 S자로 휘는 꼬리 + 줄무늬 꼬리 끝
     tail_tip = (4 + TX + 1.2 * math.sin(w), 15.5 + bob)
     c.paint(BODY, curve([(7.5 + TX, 8 + bob), (2.5 + TX, 8.5 + bob), (1.8 + TX, 13 + bob), tail_tip], 1.2, 0.9))
     c.paint(STRIPE, ellipse(tail_tip[0] - 0.2, tail_tip[1] - 0.4, 1.2, 1.2))
-    c.paint(BODY, ellipse(13.5, 7.2 + bob, 5.4 + stretch * 0.6, 3.4, tilt=0.05 * math.sin(w)))
+    c.paint(BODY, ellipse(13.5, 7.6 + bob, 5.4 + stretch * 0.6, 3.1, tilt=0.05 * math.sin(w)))
     # 등 줄무늬
     for sx in (11, 13.5, 16):
         c.paint(STRIPE, capsule((sx + stretch * 0.5, 10.2 + bob), (sx - 0.5 + stretch * 0.5, 8.9 + bob), 0.6))
-    c.paint(LIGHT, ellipse(17.2 + stretch, 5.6 + bob, 2.1, 1.6))
+    c.paint(LIGHT, ellipse(17.2 + stretch, 6.2 + bob, 2.1, 1.4))
     c.paint(BODY, cat_leg(shoulder, 0, False))
     c.paint(BODY, cat_leg(hip, 0.5, True))
     # 동그란 머리 + 뾰족 귀 (귀 안쪽은 밝게)
@@ -315,6 +315,42 @@ def cat_frame(c, t, stress):
     c.dot(HOLE, (25.5 + HX, 12 + hb))
     c.paint(DARK, ellipse(28.4 + HX, 10 + hb, 0.6, 0.5))
     c.paint(WHISKER, capsule((29 + HX, 9.4 + hb), (31.3 + HX, 9.9 + hb), 0.5), only_empty=True)
+
+
+def horse_frame(c, t, stress):
+    """옛날 택시 미터기 화면에서 달리던 말. 다리가 길쭉해서 네 발이 하나씩 따로 보이는 갤럽."""
+    HX, TX = -3.0, 3.0
+    w = 2 * math.pi * t
+    bob = 0.5 * math.sin(2 * w)
+    hb = bob + 0.4 * math.sin(2 * w - 1)
+    flow = math.sin(2 * w - 1.5)
+    shoulder, hip = (18.5, 7.4 + bob), (11.6, 7.6 + bob)
+
+    def horse_leg(root, phase, hind):
+        return gallop_leg(root, w, phase, hind, 0.8, 3, 3.1, 0.9, (0.95, 0.65))
+
+    if stress:
+        # 뒷발에서 날리는 흙먼지
+        for k in range(2):
+            p = (t * 2 + k / 2) % 1
+            c.paint(LIGHT, ellipse(4.5 + TX - 3.5 * p, 1.2 + 1.8 * p, 0.5 + 0.7 * p, 0.5 + 0.7 * p), new_part=True)
+    c.paint(FAR, horse_leg((shoulder[0] - 1.4, shoulder[1]), 0.2, False))
+    c.paint(FAR, horse_leg((hip[0] - 1.4, hip[1]), 0.7, True))
+    # 휘날리는 꼬리
+    c.paint(EAR, curve([(7 + TX, 10.4 + bob), (4 + TX, 11 + bob + 0.4 * flow), (1.5 + TX, 8.6 + bob + flow)], 1.2, 0.7), new_part=True)
+    # 둥근 엉덩이 + 몸통 + 가슴
+    c.paint(BODY, union(ellipse(12, 9.5 + bob, 3.7, 3.1), ellipse(15, 9.4 + bob, 4.8, 2.8), ellipse(18.1, 9.2 + bob, 3.1, 3)))
+    c.paint(BODY, horse_leg(shoulder, 0, False))
+    c.paint(BODY, horse_leg(hip, 0.5, True))
+    # 굵은 목 + 길쭉한 머리 + 쫑긋한 귀
+    c.paint(BODY, curve([(18.1, 9.8 + bob), (19.3, 12.3 + hb), (23.6 + HX, 13.9 + hb)], 2.3, 1.7))
+    c.paint(BODY, union(capsule((24 + HX, 14.2 + hb), (28 + HX, 12 + hb), 1.6), ellipse(28.3 + HX, 11.9 + hb, 1.8, 1.45),
+                        triangle((22.9 + HX, 14.8 + hb), (23.4 + HX, 17.2 + hb), (24.7 + HX, 15.3 + hb))))
+    # 바람에 날리는 갈기
+    c.paint(EAR, curve([(23.6 + HX, 15.6 + hb), (21.2 + HX, 14.4 + hb + 0.4 * flow), (17, 11.8 + bob + 0.6 * flow)], 1.2, 0.8))
+    c.paint(DARK, ellipse(25.5 + HX, 13.9 + hb, 0.75, 1))
+    c.dot(HOLE, (25.3 + HX, 14.4 + hb))
+    c.paint(DARK, ellipse(29.5 + HX, 12.2 + hb, 0.45, 0.45))
 
 
 def monkey_frame(c, t, stress):
@@ -522,6 +558,7 @@ def face_frame(c, t, stress):
 PETS = {
     "dog": ("강아지", (0, 0, 32, UNIT_H), dog_frame),
     "cat": ("고양이", (0, 0, 32, UNIT_H), cat_frame),
+    "horse": ("택시 미터기 말", (0, 0, 32, UNIT_H), horse_frame),
     "monkey": ("원숭이 (머리 긁기)", (0, 0, 20, UNIT_H), monkey_frame),
     "dancer": ("엉덩이 춤", (0, 0, 20, UNIT_H), dancer_frame),
     "scooter": ("상동호수공원 (스쿠터)", (0, 0, 32, UNIT_H), scooter_frame),
@@ -848,18 +885,20 @@ class PetTray:
                 self.rebuild()
 
     def animate(self):
-        """사용률이 높을수록 한 바퀴(16프레임) 도는 시간이 짧아짐: 0% 1.6초 → 100% 약 0.12초.
-        속도는 서서히 따라가고, 너무 빠르면 초당 20장으로 제한하고 프레임을 건너뜀."""
-        position = 0.0
+        """사용률이 높을수록 한 바퀴(16프레임) 도는 시간이 짧아짐: 0% 1.6초 → 100% 약 0.27초.
+        초당 20장을 넘으면 매번 같은 칸 수(정수)만큼 건너뜀. 칸 수가 들쭉날쭉하거나
+        한 번에 너무 많이 건너뛰면 다리가 순간이동하는 것처럼 보여서 최고 속도도 여기에 맞춤."""
+        index = 0
         while self.app.running:
-            cycle = 1.6 / (1 + self.speed / 8)
-            interval = max(1 / 20, cycle / FRAME_COUNT)
+            cycle = 1.6 / (1 + self.speed / 20)
+            step = max(1, math.ceil(FRAME_COUNT / 20 / cycle - 1e-9))
+            interval = cycle / FRAME_COUNT * step
             self.speed += (self.usage - self.speed) * min(1.0, interval * 2)
-            position = (position + interval / cycle * FRAME_COUNT) % FRAME_COUNT
+            index = (index + step) % FRAME_COUNT
             with self.lock:
                 frames = self.handles[1 if self.speed > 40 else 0]
                 if frames:
-                    self.icon.show_handle(frames[int(round(position)) % FRAME_COUNT])
+                    self.icon.show_handle(frames[index])
             time.sleep(interval)
 
 
