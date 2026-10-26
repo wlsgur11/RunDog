@@ -197,6 +197,18 @@ func union(_ shapes: [Shape]) -> Shape {
     return { x, y in shapes.contains { $0(x, y) } }
 }
 
+func intersect(_ a: @escaping Shape, _ b: @escaping Shape) -> Shape {
+    return { x, y in a(x, y) && b(x, y) }
+}
+
+// 몽글몽글한 털 뭉치: 타원 둘레에 작은 원을 빙 둘러 붙임
+func fluff(_ cx: Double, _ cy: Double, _ rx: Double, _ ry: Double, bumps: Int, r: Double) -> Shape {
+    return union([ellipse(cx, cy, rx, ry)] + (0..<bumps).map { k in
+        let a = 2 * Double.pi * Double(k) / Double(bumps)
+        return ellipse(cx + rx * cos(a), cy + ry * sin(a), r, r)
+    })
+}
+
 // 베지어 곡선을 따라가는 굵기가 줄어드는 선 (꼬리, 귀)
 func curve(_ points: [P], from r0: Double, to r1: Double) -> Shape {
     func at(_ t: Double) -> P {
@@ -542,14 +554,130 @@ func horseFrame(_ t: Double, stress: Bool) -> Canvas {
     return c
 }
 
+// 앉아서 꼬리를 흔들며 앞발을 번갈아 콩콩 드는 강아지 (정면). 견종마다 귀·무늬·꼬리·털이 다름.
+// 바쁠수록 더 신나게 흔들고, 40%를 넘으면 혀를 내밀고 헥헥
+func breedFrame(_ breed: Pet, _ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t
+    // 눈·코가 좌우 대칭으로 또렷하게 찍히도록 머리는 가운데 고정, 위아래도 1픽셀씩만 움직임
+    let bb = 0.0
+    let hx = 10.0, hy = 10.5 + (sin(2 * w) > 0.2 ? 1 : 0)
+    let wag = sin(4 * w)
+    let flop = 0.5 * sin(2 * w - 1.6)   // 늘어진 귀는 머리보다 한 박자 늦게 출렁
+    let lift = [sin(w) > 0.3 ? 1.0 : 0, sin(w) < -0.3 ? 1.0 : 0]
+    let marked = [Pet.shiba, .corgi, .husky].contains(breed)   // 흰 주둥이·가슴·양말 무늬
+
+    var c = Canvas(w: 20)
+    // 꼬리 (몸 뒤)
+    switch breed {
+    case .shiba, .husky:
+        // 등 위로 돌돌 말린 꼬리
+        c.paint(.body, ellipse(16.2 + 0.8 * wag, 5.8 + bb, 2.2, 2))
+        c.paint(.light, ellipse(16.4 + 0.8 * wag, 5.6 + bb, 0.9, 0.8))
+    case .pomeranian, .maltese:
+        // 복슬복슬한 깃털 꼬리
+        c.paint(.body, fluff(16 + 0.9 * wag, 6 + bb, 1.6, 1.3, bumps: 7, r: 1))
+    case .poodle:
+        // 끝에 방울이 달린 꼬리
+        c.paint(.body, union([capsule(P(13.5, 4 + bb), P(16 + 0.8 * wag, 6.4 + bb), 0.6), fluff(16.2 + 0.9 * wag, 6.8 + bb, 0.9, 0.9, bumps: 6, r: 0.8)]))
+    default:
+        break   // 코기는 꼬리 대신 엉덩이를 씰룩
+    }
+    // 뒷발 + 앉은 몸통 + 가슴
+    for fx in [5.9, 14.1] {
+        c.paint(.body, ellipse(fx, 1.4, 1.9, 1.3))
+        if marked { c.paint(.light, ellipse(fx, 1.3, 1.2, 0.7)) }
+    }
+    c.paint(.body, ellipse(10, 4.4 + bb, 4.6, 3.9, tilt: breed == .corgi ? 0.12 * wag : 0))
+    if marked { c.paint(.light, ellipse(10, 4.4 + bb, 2.4, 2.8)) }
+    // 번갈아 콩콩 드는 앞발
+    for (lx, up) in zip([8.2, 11.8], lift) {
+        let paw = P(lx, 1.2 + up)
+        c.paint(.body, newPart: false, union([capsule(P(lx, 5 + bb), paw, 1.05), ellipse(lx, paw.y, 1.3, 0.95)]))
+        if marked { c.paint(.light, ellipse(lx, paw.y, 0.9, 0.6)) }
+    }
+
+    // 머리. 뾰족 귀는 머리와 한 덩어리로 그려서 사이에 선이 안 생기게 함
+    func pointyEars(_ base: Double, _ tip: Double, _ spread: Double) -> Shape {
+        union([triangle(P(hx - spread, hy + base), P(hx - spread + 0.9, hy + tip), P(hx - 1.7, hy + base + 2.1)),
+               triangle(P(hx + spread, hy + base), P(hx + spread - 0.9, hy + tip), P(hx + 1.7, hy + base + 2.1))])
+    }
+    func innerEars(_ base: Double, _ tip: Double, _ spread: Double) -> Shape {
+        union([triangle(P(hx - spread + 0.9, hy + base + 1.3), P(hx - spread + 1.3, hy + tip - 1.3), P(hx - 2.8, hy + base + 2.2)),
+               triangle(P(hx + spread - 0.9, hy + base + 1.3), P(hx + spread - 1.3, hy + tip - 1.3), P(hx + 2.8, hy + base + 2.2))])
+    }
+    var eyeX = 3.0, eyeY = hy - 0.5
+    let head = ellipse(hx, hy, 6.1, 4.8)
+    switch breed {
+    case .shiba, .husky:
+        c.paint(.body, union([head, pointyEars(1.8, 6.6, 5.6)]))
+        c.paint(.light, innerEars(1.8, 6.6, 5.6))
+        if breed == .shiba {
+            // 볼과 턱이 하얀 우라지로 + 하얀 눈썹 점
+            c.paint(.light, intersect(head, ellipse(hx, hy - 2.6, 4.6, 2.6)))
+            for x in [7.5, 12.5] { c.dot(.light, P(x, eyeY + 2.5)) }
+        } else {
+            // 허스키 가면: 하얀 아랫얼굴 + 이마 가운데 흰 줄 + 눈 위 흰 점
+            c.paint(.light, intersect(head, union([ellipse(hx, hy - 2.3, 5.2, 2.8), capsule(P(hx, hy + 3.4), P(hx, hy - 1), 0.7)])))
+            for s in [-1.0, 1.0] { c.paint(.light, ellipse(hx + s * 2.7, hy + 2, 0.9, 0.6)) }
+        }
+    case .corgi:
+        // 아주 큰 귀 + 이마의 흰 줄 + 흰 주둥이
+        c.paint(.body, union([head, pointyEars(1.2, 7.4, 6.1)]))
+        c.paint(.light, innerEars(1.2, 7.4, 6.1))
+        c.paint(.light, intersect(head, union([ellipse(hx, hy - 2.5, 3.6, 2.4), capsule(P(hx, hy + 4.6), P(hx, hy - 1), 0.8)])))
+    case .pomeranian:
+        // 동그란 털 뭉치 + 털 위로 살짝 나온 작은 귀
+        c.paint(.body, union([fluff(hx, hy - 0.4, 6, 4.8, bumps: 16, r: 1.2), pointyEars(3.4, 6.4, 3.9)]))
+        c.paint(.light, ellipse(hx, hy - 2.4, 2.6, 1.6))
+    case .maltese:
+        // 길게 늘어진 귀(머리 뒤) + 동그란 하얀 머리 + 정수리 리본
+        for s in [-1.0, 1.0] {
+            c.paint(.body, union([capsule(P(hx + s * 4.8, hy + 1.6), P(hx + s * 5.9, hy - 3 + flop), 2), ellipse(hx + s * 5.9, hy - 3.5 + flop, 2, 1.4)]))
+        }
+        c.paint(.body, union([ellipse(hx, hy, 5.3, 4.6), ellipse(hx, hy + 4.2, 1.6, 1.2)]))
+        c.paint(.tongue, union([triangle(P(hx - 2.2, hy + 4.4), P(hx - 2.2, hy + 6.4), P(hx, hy + 5.4)),
+                                triangle(P(hx + 2.2, hy + 4.4), P(hx + 2.2, hy + 6.4), P(hx, hy + 5.4))]))
+    case .poodle:
+        // 동그란 머리 방울 + 곱슬곱슬 늘어진 귀
+        c.paint(.body, fluff(hx, hy + 4.2, 3, 1.8, bumps: 9, r: 1))
+        c.paint(.body, ellipse(hx, hy - 0.2, 5, 4.5))
+        for s in [-1.0, 1.0] {
+            c.paint(.ear, newPart: true, fluff(hx + s * 5.2, hy - 1.6 + flop, 1.3, 2.4, bumps: 8, r: 1))
+        }
+    default:
+        break
+    }
+    // 얼굴: 볼터치, 반짝이는 눈, 코, 바쁠 때 혀
+    // 2x2 눈(왼쪽 위에 하이라이트), 2x1 코. 허스키는 파란 눈
+    for s in [-1.0, 1.0] {
+        let ex = hx + s * eyeX
+        c.paint(.blush, ellipse(hx + s * 5, eyeY - 1.5, 1, 0.5))
+        c.paint(breed == .husky ? .sweat : .dark, newPart: false, ellipse(ex, eyeY, 0.9, 1))
+        if breed == .husky { c.dot(.dark, P(ex + 0.5, eyeY - 0.5)) }
+        c.dot(.hole, P(ex - 0.5, eyeY + 0.5))
+    }
+    let noseY = eyeY - 1.5
+    c.paint(.dark, ellipse(hx, noseY, 1, 0.5))
+    if stress {
+        c.paint(.tongue, capsule(P(hx, noseY - 1), P(hx, noseY - 2), 0.75))
+    }
+    return c
+}
+
 enum Pet: String, CaseIterable {
-    case dog, cat, horse, monkey, dancer, scooter, face
+    case dog, cat, horse, shiba, corgi, pomeranian, maltese, poodle, husky, monkey, dancer, scooter, face
 
     var title: String {
         switch self {
         case .dog: return "강아지"
         case .cat: return "고양이"
         case .horse: return "택시 미터기 말"
+        case .shiba: return "시바견"
+        case .corgi: return "웰시코기"
+        case .pomeranian: return "포메라니안"
+        case .maltese: return "말티즈"
+        case .poodle: return "토이푸들"
+        case .husky: return "허스키"
         case .monkey: return "원숭이 (머리 긁기)"
         case .dancer: return "엉덩이 춤"
         case .scooter: return "상동호수공원 (스쿠터)"
@@ -564,6 +692,7 @@ enum Pet: String, CaseIterable {
             case .dog: return dogFrame(t, stress: stress)
             case .cat: return catFrame(t, stress: stress)
             case .horse: return horseFrame(t, stress: stress)
+            case .shiba, .corgi, .pomeranian, .maltese, .poodle, .husky: return breedFrame(self, t, stress: stress)
             case .monkey: return monkeyFrame(t, stress: stress)
             case .dancer: return dancerFrame(t, stress: stress)
             case .scooter: return scooterFrame(t, stress: stress)
@@ -786,6 +915,8 @@ final class PetItem: NSObject, NSMenuDelegate {
 
         let petMenu = NSMenu()
         for p in Pet.allCases {
+            // 달리는 동물 / 앉아 있는 강아지들 / 그 밖의 캐릭터로 묶음
+            if p == .shiba || p == .monkey { petMenu.addItem(.separator()) }
             let item = NSMenuItem(title: p.title, action: #selector(selectPet(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = p.rawValue

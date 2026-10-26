@@ -24,11 +24,28 @@ jobs:
       - name: Install dependencies
         run: pip install -r windows/requirements.txt pyinstaller
 
-      - name: Self test (drawing, icon handles, CPU/GPU counters)
+      # 태그 빌드면 exe에 버전을 넣어서 자동 업데이트가 새 릴리스와 비교할 수 있게 함 (그 외는 dev)
+      - name: Stamp version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: echo "VERSION = \"${GITHUB_REF_NAME#v}\"" > windows/_version.py
+
+      - name: Self test (drawing, icon handles, CPU/GPU counters, release lookup)
         run: python windows/rundog.py --selftest
 
       - name: Build exe
         run: pyinstaller --onefile --noconsole --name RunDog --hidden-import pystray._win32 windows/rundog.py
+
+      # 자동 업데이트 점검: 복사본 exe가 최신 릴리스를 받아 실행 중인 자기 자신과 바꿔치기할 수 있는지
+      - name: Self-update test
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "update-test"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item dist/RunDog.exe $dir
+          $p = Start-Process (Join-Path $dir "RunDog.exe") -ArgumentList "--update-test" -Wait -PassThru
+          Get-ChildItem $dir | Format-Table Name, Length
+          if ($p.ExitCode -ne 0) { throw "self-update failed ($($p.ExitCode))" }
 
       - uses: actions/upload-artifact@v4
         with:

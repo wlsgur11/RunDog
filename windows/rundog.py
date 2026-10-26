@@ -7,6 +7,7 @@ Mac 버전(mac/main.swift)과 같은 그림 로직을 파이썬으로 옮긴 것
     python rundog.py                      # 트레이 앱 실행 (Windows)
     python rundog.py --preview out.png    # 모든 캐릭터 미리보기 시트 저장 (어느 OS든)
     python rundog.py --selftest           # 그리기·아이콘·CPU/GPU 측정 점검 (Windows)
+    RunDog.exe --update-test              # 최신 릴리스를 받아 exe를 바꿔치기만 하고 종료 (CI 점검용)
 """
 
 import ctypes
@@ -80,6 +81,10 @@ class Canvas:
         x, y = int((p[0] + self.ox) * self.scale), int((p[1] + self.oy) * self.scale)
         if 0 <= x < self.w and 0 <= y < self.h:
             self.ink[y * self.w + x] = ink
+
+    def center_on(self, x):
+        """좌우 대칭 캐릭터용: 가운데 x가 픽셀 경계나 픽셀 한가운데에 오도록 살짝 밀어서 양쪽 눈이 똑같이 찍히게 함."""
+        self.ox = round((x + self.ox) * self.scale * 2) / 2 / self.scale - x
 
     def set_px(self, ink, x, y):
         """픽셀 좌표로 바로 찍기 (배율과 상관없이 1픽셀 선이 필요한 안경테 같은 곳)."""
@@ -207,6 +212,17 @@ def union(*shapes):
 
     return Shape(test, (min(s.bbox[0] for s in shapes), min(s.bbox[1] for s in shapes),
                         max(s.bbox[2] for s in shapes), max(s.bbox[3] for s in shapes)))
+
+
+def intersect(a, b):
+    return Shape(lambda x, y: a.test(x, y) and b.test(x, y),
+                 (max(a.bbox[0], b.bbox[0]), max(a.bbox[1], b.bbox[1]), min(a.bbox[2], b.bbox[2]), min(a.bbox[3], b.bbox[3])))
+
+
+def fluff(cx, cy, rx, ry, bumps, r):
+    """몽글몽글한 털 뭉치: 타원 둘레에 작은 원을 빙 둘러 붙임."""
+    return union(ellipse(cx, cy, rx, ry), *[ellipse(cx + rx * math.cos(2 * math.pi * k / bumps),
+                                                    cy + ry * math.sin(2 * math.pi * k / bumps), r, r) for k in range(bumps)])
 
 
 def curve(points, r0, r1):
@@ -346,6 +362,109 @@ def horse_frame(c, t, stress):
     c.paint(DARK, ellipse(25.5 + HX, 13.9 + hb, 0.75, 1))
     c.dot(HOLE, (25.3 + HX, 14.4 + hb))
     c.paint(DARK, ellipse(29.5 + HX, 12.2 + hb, 0.45, 0.45))
+
+
+def breed_frame(breed, c, t, stress):
+    """앉아서 꼬리를 흔들며 앞발을 번갈아 콩콩 드는 강아지 (정면). 견종마다 귀·무늬·꼬리·털이 다름.
+    바쁠수록 더 신나게 흔들고, 40%를 넘으면 혀를 내밀고 헥헥."""
+    w = 2 * math.pi * t
+    # 눈·코가 좌우 대칭으로 또렷하게 찍히도록 머리는 가운데 고정, 위아래도 1칸씩만 움직임
+    hx, hy = 10.0, 10.5 + (1 if math.sin(2 * w) > 0.2 else 0)
+    wag = math.sin(4 * w)
+    flop = 0.5 * math.sin(2 * w - 1.6)  # 늘어진 귀는 머리보다 한 박자 늦게 출렁
+    lift = (1.0 if math.sin(w) > 0.3 else 0.0, 1.0 if math.sin(w) < -0.3 else 0.0)
+    marked = breed in ("shiba", "corgi", "husky")  # 흰 주둥이·가슴·양말 무늬
+
+    # 꼬리 (몸 뒤)
+    if breed in ("shiba", "husky"):
+        # 등 위로 돌돌 말린 꼬리
+        c.paint(BODY, ellipse(16.2 + 0.8 * wag, 5.8, 2.2, 2))
+        c.paint(LIGHT, ellipse(16.4 + 0.8 * wag, 5.6, 0.9, 0.8))
+    elif breed in ("pomeranian", "maltese"):
+        # 복슬복슬한 깃털 꼬리
+        c.paint(BODY, fluff(16 + 0.9 * wag, 6, 1.6, 1.3, 7, 1))
+    elif breed == "poodle":
+        # 끝에 방울이 달린 꼬리
+        c.paint(BODY, union(capsule((13.5, 4), (16 + 0.8 * wag, 6.4), 0.6), fluff(16.2 + 0.9 * wag, 6.8, 0.9, 0.9, 6, 0.8)))
+    # 코기는 꼬리 대신 엉덩이를 씰룩
+    # 뒷발 + 앉은 몸통 + 가슴
+    for fx in (5.9, 14.1):
+        c.paint(BODY, ellipse(fx, 1.4, 1.9, 1.3))
+        if marked:
+            c.paint(LIGHT, ellipse(fx, 1.3, 1.2, 0.7))
+    c.paint(BODY, ellipse(10, 4.4, 4.6, 3.9, tilt=0.12 * wag if breed == "corgi" else 0))
+    if marked:
+        c.paint(LIGHT, ellipse(10, 4.4, 2.4, 2.8))
+    # 번갈아 콩콩 드는 앞발
+    for lx, up in zip((8.2, 11.8), lift):
+        paw = (lx, 1.2 + up)
+        c.paint(BODY, union(capsule((lx, 5), paw, 1.05), ellipse(lx, paw[1], 1.3, 0.95)), new_part=False)
+        if marked:
+            c.paint(LIGHT, ellipse(lx, paw[1], 0.9, 0.6))
+
+    # 머리. 뾰족 귀는 머리와 한 덩어리로 그려서 사이에 선이 안 생기게 함
+    def pointy_ears(base, tip, spread):
+        return union(triangle((hx - spread, hy + base), (hx - spread + 0.9, hy + tip), (hx - 1.7, hy + base + 2.1)),
+                     triangle((hx + spread, hy + base), (hx + spread - 0.9, hy + tip), (hx + 1.7, hy + base + 2.1)))
+
+    def inner_ears(base, tip, spread):
+        return union(triangle((hx - spread + 0.9, hy + base + 1.3), (hx - spread + 1.3, hy + tip - 1.3), (hx - 2.8, hy + base + 2.2)),
+                     triangle((hx + spread - 0.9, hy + base + 1.3), (hx + spread - 1.3, hy + tip - 1.3), (hx + 2.8, hy + base + 2.2)))
+
+    eye_x, eye_y = 3.0, hy - 0.5
+    head = ellipse(hx, hy, 6.1, 4.8)
+    if breed in ("shiba", "husky"):
+        c.paint(BODY, union(head, pointy_ears(1.8, 6.6, 5.6)))
+        c.paint(LIGHT, inner_ears(1.8, 6.6, 5.6))
+        if breed == "shiba":
+            # 볼과 턱이 하얀 우라지로 + 하얀 눈썹 점
+            c.paint(LIGHT, intersect(head, ellipse(hx, hy - 2.6, 4.6, 2.6)))
+            for x in (7.5, 12.5):
+                c.paint(LIGHT, ellipse(x, eye_y + 2.5, 0.5, 0.5))
+        else:
+            # 허스키 가면: 하얀 아랫얼굴 + 이마 가운데 흰 줄 + 눈 위 흰 점
+            c.paint(LIGHT, intersect(head, union(ellipse(hx, hy - 2.3, 5.2, 2.8), capsule((hx, hy + 3.4), (hx, hy - 1), 0.7))))
+            for sx in (-1, 1):
+                c.paint(LIGHT, ellipse(hx + sx * 2.7, hy + 2, 0.9, 0.6))
+    elif breed == "corgi":
+        # 아주 큰 귀 + 이마의 흰 줄 + 흰 주둥이
+        c.paint(BODY, union(head, pointy_ears(1.2, 7.4, 6.1)))
+        c.paint(LIGHT, inner_ears(1.2, 7.4, 6.1))
+        c.paint(LIGHT, intersect(head, union(ellipse(hx, hy - 2.5, 3.6, 2.4), capsule((hx, hy + 4.6), (hx, hy - 1), 0.8))))
+    elif breed == "pomeranian":
+        # 동그란 털 뭉치 + 털 위로 살짝 나온 작은 귀
+        c.paint(BODY, union(fluff(hx, hy - 0.4, 6, 4.8, 16, 1.2), pointy_ears(3.4, 6.4, 3.9)))
+        c.paint(LIGHT, ellipse(hx, hy - 2.4, 2.6, 1.6))
+    elif breed == "maltese":
+        # 길게 늘어진 귀(머리 뒤) + 동그란 하얀 머리 + 정수리 리본
+        for sx in (-1, 1):
+            c.paint(BODY, union(capsule((hx + sx * 4.8, hy + 1.6), (hx + sx * 5.9, hy - 3 + flop), 2),
+                                ellipse(hx + sx * 5.9, hy - 3.5 + flop, 2, 1.4)))
+        c.paint(BODY, union(ellipse(hx, hy, 5.3, 4.6), ellipse(hx, hy + 4.2, 1.6, 1.2)))
+        c.paint(TONGUE, union(triangle((hx - 2.2, hy + 4.4), (hx - 2.2, hy + 6.4), (hx, hy + 5.4)),
+                              triangle((hx + 2.2, hy + 4.4), (hx + 2.2, hy + 6.4), (hx, hy + 5.4))))
+    elif breed == "poodle":
+        # 동그란 머리 방울 + 곱슬곱슬 늘어진 귀
+        c.paint(BODY, fluff(hx, hy + 4.2, 3, 1.8, 9, 1))
+        c.paint(BODY, ellipse(hx, hy - 0.2, 5, 4.5))
+        for sx in (-1, 1):
+            c.paint(EAR, fluff(hx + sx * 5.2, hy - 1.6 + flop, 1.3, 2.4, 8, 1), new_part=True)
+    # 2x2 눈(왼쪽 위에 하이라이트), 2x1 코. 허스키는 파란 눈
+    for sx in (-1, 1):
+        ex = hx + sx * eye_x
+        c.paint(BLUSH, ellipse(hx + sx * 5, eye_y - 1.5, 1, 0.5))
+        c.paint(SWEAT if breed == "husky" else DARK, ellipse(ex, eye_y, 0.9, 1), new_part=False)
+        if breed == "husky":
+            c.dot(DARK, (ex + 0.5, eye_y - 0.5))
+        c.dot(HOLE, (ex - 0.5, eye_y + 0.5))
+    nose_y = eye_y - 1.5
+    c.paint(DARK, ellipse(hx, nose_y, 1, 0.5))
+    if stress:
+        c.paint(TONGUE, capsule((hx, nose_y - 1), (hx, nose_y - 2), 0.75))
+
+
+BREEDS = [("shiba", "시바견"), ("corgi", "웰시코기"), ("pomeranian", "포메라니안"),
+          ("maltese", "말티즈"), ("poodle", "토이푸들"), ("husky", "허스키")]
 
 
 def monkey_frame(c, t, stress):
@@ -554,6 +673,7 @@ PETS = {
     "dog": ("강아지", (0, 0, 32, UNIT_H), dog_frame),
     "cat": ("고양이", (0, 0, 32, UNIT_H), cat_frame),
     "horse": ("택시 미터기 말", (0, 0, 32, UNIT_H), horse_frame),
+    **{bid: (title, (0, 0, 20, UNIT_H), lambda c, t, stress, bid=bid: breed_frame(bid, c, t, stress)) for bid, title in BREEDS},
     "monkey": ("원숭이 (머리 긁기)", (0, 0, 20, UNIT_H), monkey_frame),
     "dancer": ("엉덩이 춤", (0, 0, 20, UNIT_H), dancer_frame),
     "scooter": ("상동호수공원 (스쿠터)", (0, 0, 32, UNIT_H), scooter_frame),
@@ -588,6 +708,8 @@ def render_frames(pet, size, stress):
     frames = []
     for i in range(FRAME_COUNT):
         c = Canvas(size, box)
+        if pet in dict(BREEDS):
+            c.center_on(10)
         draw(c, i / FRAME_COUNT, stress)
         frames.append(c)
     return frames
@@ -762,6 +884,93 @@ def set_autostart(enabled):
                 pass
 
 
+# MARK: - 자동 업데이트
+# exe로 실행 중이면 켤 때와 6시간마다 GitHub의 최신 릴리스를 확인해서, 새 버전이 있으면
+# 받아서 exe를 바꿔치기하고 다시 실행함. 실행 중인 exe는 지울 수 없지만 이름은 바꿀 수 있음.
+
+REPO = "wlsgur11/RunDog"
+try:
+    from _version import VERSION  # CI가 태그 빌드 때 만들어 넣음 (예: "1.4.0")
+except ImportError:
+    VERSION = "dev"
+UPDATE_EVERY = 6 * 3600
+
+
+def parse_version(v):
+    try:
+        return tuple(int(x) for x in v.lstrip("v").split("."))
+    except ValueError:
+        return ()
+
+
+def latest_release():
+    """최신 릴리스의 (버전, exe 주소, exe 크기). exe가 아직 안 올라왔으면 None."""
+    import urllib.request
+    req = urllib.request.Request("https://api.github.com/repos/%s/releases/latest" % REPO,
+                                 headers={"User-Agent": "RunDog", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.load(r)
+    for asset in data.get("assets", []):
+        if asset.get("name") == "RunDog.exe":
+            return data["tag_name"].lstrip("v"), asset["browser_download_url"], asset["size"]
+    return None
+
+
+def install_update(exe, url, size):
+    """새 exe를 옆에 받아 두고, 실행 중인 exe는 .old로 이름을 바꾼 뒤 그 자리에 넣음."""
+    import urllib.request
+    new, old = exe + ".new", exe + ".old"
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "RunDog"}), timeout=120) as r, \
+            open(new, "wb") as f:
+        while chunk := r.read(1 << 16):
+            f.write(chunk)
+    if os.path.getsize(new) != size:
+        os.remove(new)
+        raise OSError("받은 파일 크기가 릴리스와 다름")
+    try:
+        os.remove(old)
+    except OSError:
+        pass
+    os.replace(exe, old)
+    try:
+        os.replace(new, exe)
+    except OSError:
+        os.replace(old, exe)
+        raise
+
+
+def relaunch(exe, *args):
+    """PyInstaller 단일 exe가 다른 단일 exe를 띄울 땐 환경 변수를 초기화해야 새 exe가 자기 파일로 시작함."""
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("_PYI", "_MEI"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    subprocess.Popen([exe, *args], env=env, close_fds=True,
+                     creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+
+
+def remove_old_exe():
+    """업데이트 직후엔 이전 exe가 아직 종료 중일 수 있어서 몇 번 다시 시도."""
+    for _ in range(10):
+        try:
+            os.remove(sys.executable + ".old")
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            time.sleep(1)
+
+
+def update_test():
+    """CI 점검: 최신 릴리스 exe를 받아 지금 실행 중인 exe와 바꿔치기만 하고 종료 코드로 결과를 알림."""
+    try:
+        version, url, size = latest_release()
+        install_update(sys.executable, url, size)
+        ok = os.path.getsize(sys.executable) == size and os.path.exists(sys.executable + ".old")
+    except Exception:
+        ok = False
+    sys.exit(0 if ok else 1)
+
+
 def tray_icon_size():
     """작업 표시줄이 있는 모니터의 배율에 맞는 트레이 아이콘 크기 (100% 16px, 125% 20px, 150% 24px, 200% 32px).
     크기가 어긋나면 Windows가 그림을 늘리거나 줄여서 픽셀이 뭉개짐."""
@@ -847,8 +1056,13 @@ class PetTray:
         def checked(key, value):
             return lambda item: self.settings[key] == value
 
-        pets = Menu(*[Item(title, choose("pet", pid), checked=checked("pet", pid), radio=True)
-                      for pid, (title, _, _) in PETS.items()])
+        pet_items = []
+        for pid, (title, _, _) in PETS.items():
+            # 달리는 동물 / 앉아 있는 강아지들 / 그 밖의 캐릭터로 묶음
+            if pid in ("shiba", "monkey"):
+                pet_items.append(Menu.SEPARATOR)
+            pet_items.append(Item(title, choose("pet", pid), checked=checked("pet", pid), radio=True))
+        pets = Menu(*pet_items)
         colors = Menu(*[Item(title, choose("color", cid), checked=checked("color", cid), radio=True)
                         for cid, title in COLOR_CHOICES])
         def toggle_autostart(icon, item):
@@ -862,6 +1076,7 @@ class PetTray:
             Menu.SEPARATOR,
             Item("작업 관리자 열기", lambda icon, item: os.startfile("taskmgr"), default=True),
             Item("로그인 시 자동 실행", toggle_autostart, checked=lambda item: autostart_enabled()),
+            Item("버전 %s (자동 업데이트)" % VERSION, lambda icon, item: None, enabled=False),
             Item("종료", lambda icon, item: self.app.quit()),
         )
 
@@ -902,7 +1117,32 @@ class App:
         self.settings = load_settings()
         self.icon_size = tray_icon_size()
         self.running = True
+        self.just_updated = "--updated" in sys.argv
         self.pets = [PetTray(self, "cpu", make_cpu_reader()), PetTray(self, "gpu", GPUReader())]
+
+    def update_loop(self):
+        if not getattr(sys, "frozen", False):
+            return
+        remove_old_exe()
+        if self.just_updated:
+            try:
+                self.pets[0].icon.notify("v%s로 업데이트했어요" % VERSION, "RunDog")
+            except Exception:
+                pass
+        if not parse_version(VERSION):  # Actions 아티팩트 같은 개발 빌드는 업데이트하지 않음
+            return
+        time.sleep(10)
+        while self.running:
+            try:
+                found = latest_release()
+                if found and parse_version(found[0]) > parse_version(VERSION):
+                    install_update(sys.executable, found[1], found[2])
+                    relaunch(sys.executable, "--updated")
+                    self.quit()
+                    return
+            except Exception:  # 인터넷이 끊겼거나 쓰기 권한이 없으면 다음에 다시
+                pass
+            time.sleep(UPDATE_EVERY)
 
     def sample_loop(self):
         while self.running:
@@ -923,6 +1163,7 @@ class App:
 
     def run(self):
         threading.Thread(target=self.sample_loop, daemon=True).start()
+        threading.Thread(target=self.update_loop, daemon=True).start()
         # 하나는 별도 스레드, 마지막 하나는 메인 스레드에서 메시지 루프를 돌림
         for pet in self.pets[:-1]:
             pet.icon.run_detached(pet.setup)
@@ -942,6 +1183,7 @@ def selftest():
     cpu, gpu = make_cpu_reader(), GPUReader()
     time.sleep(1)
     print("cpu %.1f%%  gpu %.1f%% (counter ok: %s)" % (cpu(), gpu(), gpu.ok))
+    print("version", VERSION, "latest release", latest_release()[0])
     print("selftest ok")
 
 
@@ -959,6 +1201,8 @@ def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "--selftest":
         selftest()
         return
+    if len(sys.argv) >= 2 and sys.argv[1] == "--update-test":
+        update_test()
     App().run()
 
 
