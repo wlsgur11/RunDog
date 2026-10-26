@@ -329,11 +329,6 @@ def horse_frame(c, t, stress):
     def horse_leg(root, phase, hind):
         return gallop_leg(root, w, phase, hind, 0.8, 3, 3.1, 0.9, (0.95, 0.65))
 
-    if stress:
-        # 뒷발에서 날리는 흙먼지
-        for k in range(2):
-            p = (t * 2 + k / 2) % 1
-            c.paint(LIGHT, ellipse(4.5 + TX - 3.5 * p, 1.2 + 1.8 * p, 0.5 + 0.7 * p, 0.5 + 0.7 * p), new_part=True)
     c.paint(FAR, horse_leg((shoulder[0] - 1.4, shoulder[1]), 0.2, False))
     c.paint(FAR, horse_leg((hip[0] - 1.4, hip[1]), 0.7, True))
     # 휘날리는 꼬리

@@ -522,13 +522,6 @@ func horseFrame(_ t: Double, stress: Bool) -> Canvas {
     }
 
     var c = Canvas(w: 32)
-    if stress {
-        // 뒷발에서 날리는 흙먼지
-        for k in 0..<2 {
-            let p = (t * 2 + Double(k) / 2).truncatingRemainder(dividingBy: 1)
-            c.paint(.light, newPart: true, ellipse(4.5 - 3.5 * p, 1.2 + 1.8 * p, 0.5 + 0.7 * p, 0.5 + 0.7 * p))
-        }
-    }
     c.paint(.far, horseLeg(P(shoulder.x - 1.4, shoulder.y), 0.2, hind: false))
     c.paint(.far, horseLeg(P(hip.x - 1.4, hip.y), 0.7, hind: true))
     // 휘날리는 꼬리
