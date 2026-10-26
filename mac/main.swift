@@ -185,6 +185,14 @@ func triangle(_ a: P, _ b: P, _ c: P) -> Shape {
     }
 }
 
+// 속이 빈 사각 테 (안경알 테두리)
+func frame(_ cx: Double, _ cy: Double, _ hw: Double, _ hh: Double, thickness: Double) -> Shape {
+    return { x, y in
+        let dx = abs(x - cx), dy = abs(y - cy)
+        return dx <= hw && dy <= hh && (dx > hw - thickness || dy > hh - thickness)
+    }
+}
+
 func union(_ shapes: [Shape]) -> Shape {
     return { x, y in shapes.contains { $0(x, y) } }
 }
@@ -431,7 +439,11 @@ func scooterFrame(_ t: Double, stress: Bool) -> Canvas {
     c.paint(.blush, ellipse(15.3, 12 + r + cheek, 0.8, 0.5))
     c.paint(.helmet, ellipse(12.2, 16.5 + r, 4.4, 1.4))
     c.paint(.helmet, capsule(P(10, 15.3 + r), P(10.8, 11.6 + r + jowl * 0.6), 0.4))
-    c.paint(.dark, ellipse(15.7, 14.3 + r, 0.55, 0.8))
+    // 옆에서 본 뿔테 안경: 밝은 알 + 테 + 점 눈, 귀까지 가는 다리
+    c.paint(.light, frame(15.5, 14.5 + r, 1.4, 1.4, thickness: 1.4))
+    c.paint(.helmet, frame(15.5, 14.5 + r, 1.4, 1.4, thickness: 0.5))
+    c.paint(.dark, ellipse(15.5, 14.5 + r, 0.45, 0.45))
+    c.paint(.helmet, capsule(P(14, 14.9 + r), P(12.2, 15.1 + r), 0.35))
     c.paint(.dark, ellipse(16.6, 12.9 + r + cheek * 0.5, 0.45, 0.4))
     if stress {
         // 바람 가르는 효과선
@@ -443,7 +455,7 @@ func scooterFrame(_ t: Double, stress: Bool) -> Canvas {
 }
 
 // B. 영상처럼 셀카 시점의 얼굴 클로즈업: 남색 반모 헬멧(검정 턱끈, 왼쪽 빨간 버클), 청록 티셔츠와 가슴 패치,
-// 통통한 볼과 이중턱, 가는 눈, 뾰로통 내민 입. 양 볼살과 턱살이 엇갈려 덜덜 떨림
+// 통통한 볼과 이중턱, 가는 눈과 검정 뿔테 안경, 뾰로통 내민 입. 양 볼살과 턱살이 엇갈려 덜덜 떨림
 func faceFrame(_ t: Double, stress: Bool) -> Canvas {
     let w = 2 * Double.pi * t
     let amp = stress ? 0.8 : 0.5
@@ -462,8 +474,8 @@ func faceFrame(_ t: Double, stress: Bool) -> Canvas {
     // 통통한 얼굴 (넓고 둥글게)
     c.paint(.tan, newPart: true, ellipse(10, 10 + head, 6.7, 5.2))
     // 검정 턱끈: 볼살 뒤로 지나가서 관자놀이와 턱 밑에만 보임
-    c.paint(.helmet, capsule(P(3.8, 12.8 + head), P(7, 3.8 + head + chin), 0.45))
-    c.paint(.helmet, capsule(P(16.2, 12.8 + head), P(13, 3.8 + head + chin), 0.45))
+    c.paint(.helmet, capsule(P(3.8, 13.8 + head), P(7, 3.8 + head + chin), 0.45))
+    c.paint(.helmet, capsule(P(16.2, 13.8 + head), P(13, 3.8 + head + chin), 0.45))
     // 처진 양 볼살 → 턱살 → 이중턱 (볼과 이중턱은 테두리가 생겨서 살 접힘처럼 보임)
     c.paint(.tan, newPart: true, ellipse(4.9, 7.6 + head + left, 2.7, 2.3))
     c.paint(.tan, newPart: true, ellipse(15.1, 7.6 + head + right, 2.7, 2.3))
@@ -474,13 +486,17 @@ func faceFrame(_ t: Double, stress: Bool) -> Canvas {
     // 왼쪽 턱 아래 빨간 버클
     c.paint(.shirt, newPart: true, ellipse(6.3, 4.4 + head + chin, 0.8, 0.7))
     // 남색 반모 헬멧: 이마 위만 덮음 + 반짝이
-    let helmetY = 12.8 + head
+    let helmetY = 13.8 + head
     c.paint(.helmet, newPart: true, { x, y in y > helmetY && ellipse(10, 13.8 + head, 7.2, 4.2)(x, y) })
     c.paint(.light, ellipse(6.8, 16.2 + head, 1, 0.6))
-    // 가는 눈
-    for ex in [7.4, 12.6] {
-        c.paint(.dark, capsule(P(ex - 0.8, 10.2 + head), P(ex + 0.8, 10.2 + head), 0.45))
+    // 검정 뿔테 안경: 5x4픽셀 테 두 개를 가운데 2픽셀 띄우고 코다리로 연결.
+    // 렌즈 안은 피부색에 세로로 긴 점 눈 + 반짝이 한 점 (픽셀 격자에 맞게 x.5 위치)
+    for ex in [6.5, 13.5] {
+        c.paint(.helmet, frame(ex, 11 + head, 2.4, 1.9, thickness: 0.5))
+        c.paint(.dark, ellipse(ex, 11 + head, 0.45, 0.9))
+        c.dot(.light, P(ex - 1, 11.5 + head))
     }
+    c.paint(.helmet, capsule(P(9, 11.5 + head), P(11, 11.5 + head), 0.4))
     // 뾰로통 내민 입술 (테두리 없이 분홍 + 가운데 작게 벌린 입)
     let mouthY = 7.8 + head + chin * 0.3
     c.paint(.blush, ellipse(10, mouthY, 0.9 + 0.3 * pout, 0.6))

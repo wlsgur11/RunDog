@@ -81,6 +81,13 @@ class Canvas:
         if 0 <= x < self.w and 0 <= y < self.h:
             self.ink[y * self.w + x] = ink
 
+    def set_px(self, ink, x, y):
+        """픽셀 좌표로 바로 찍기 (배율과 상관없이 1픽셀 선이 필요한 안경테 같은 곳)."""
+        if 0 <= x < self.w and 0 <= y < self.h:
+            if self.ink[y * self.w + x] == NONE:
+                self.part[y * self.w + x] = self.parts
+            self.ink[y * self.w + x] = ink
+
     def at(self, x, y):
         return self.ink[y * self.w + x] if 0 <= x < self.w and 0 <= y < self.h else NONE
 
@@ -179,6 +186,15 @@ def triangle(a, b, c):
 
     xs, ys = (a[0], b[0], c[0]), (a[1], b[1], c[1])
     return Shape(test, (min(xs), min(ys), max(xs), max(ys)))
+
+
+def frame(cx, cy, hw, hh, thickness):
+    """속이 빈 사각 테 (안경알 테두리)."""
+    def test(x, y):
+        dx, dy = abs(x - cx), abs(y - cy)
+        return dx <= hw and dy <= hh and (dx > hw - thickness or dy > hh - thickness)
+
+    return Shape(test, (cx - hw, cy - hh, cx + hw, cy + hh))
 
 
 def union(*shapes):
@@ -416,7 +432,11 @@ def scooter_frame(c, t, stress):
     c.paint(BLUSH, ellipse(15.3, 12 + r + cheek, 0.8, 0.5))
     c.paint(HELMET, ellipse(12.2, 16.5 + r, 4.4, 1.4))
     c.paint(HELMET, capsule((10, 15.3 + r), (10.8, 11.6 + r + jowl * 0.6), 0.4))
-    c.paint(DARK, ellipse(15.7, 14.3 + r, 0.55, 0.8))
+    # 옆에서 본 뿔테 안경: 밝은 알 + 테 + 점 눈, 귀까지 가는 다리
+    c.paint(LIGHT, frame(15.5, 14.5 + r, 1.4, 1.4, 1.4))
+    c.paint(HELMET, frame(15.5, 14.5 + r, 1.4, 1.4, 0.5))
+    c.paint(DARK, ellipse(15.5, 14.5 + r, 0.45, 0.45))
+    c.paint(HELMET, capsule((14, 14.9 + r), (12.2, 15.1 + r), 0.35))
     c.paint(DARK, ellipse(16.6, 12.9 + r + cheek * 0.5, 0.45, 0.4))
     if stress:
         # 바람 가르는 효과선
@@ -424,9 +444,37 @@ def scooter_frame(c, t, stress):
             c.paint(WHISKER, capsule((1.5, y), (5, y), 0.45), only_empty=True)
 
 
+def face_glasses(c, cy):
+    """검정 뿔테 안경: 렌즈 두 개를 가운데 띄우고 코다리로 연결, 렌즈 안엔 세로로 긴 점 눈 + 반짝이.
+    아이콘 배율이 제각각이라 테가 끊기거나 두꺼워지지 않게 픽셀 단위로 좌우 대칭을 맞춰 찍음."""
+    s = c.scale
+    lw = max(5, int(round(4.8 * s)) | 1)  # 렌즈 폭: 홀수라야 눈이 가운데 옴
+    lh = max(4, int(round(3 * s)))
+    m2 = int(round((10 + c.ox) * s * 2))   # 얼굴 가운데 (반 픽셀 단위)
+    if m2 % 2 == 0:  # 가운데가 픽셀 경계 → 틈도 짝수
+        gap = max(2, int(round(2 * s / 2)) * 2)
+        left_end = m2 // 2 - gap // 2 - 1
+    else:            # 가운데가 픽셀 한가운데 → 틈도 홀수
+        gap = max(1, int(round(2 * s)) | 1)
+        left_end = (m2 - 1) // 2 - (gap - 1) // 2 - 1
+    top = int(round((cy + c.oy) * s + lh / 2)) - 1
+    for x0 in (left_end - lw + 1, left_end + gap + 1):
+        for x in range(x0, x0 + lw):
+            for y in range(top - lh + 1, top + 1):
+                if x in (x0, x0 + lw - 1) or y in (top, top - lh + 1):
+                    c.set_px(HELMET, x, y)
+        eye_x = x0 + lw // 2
+        for y in range(top - lh + 2, top):
+            if abs(y - (top - (lh - 1) / 2)) <= 1:
+                c.set_px(DARK, eye_x, y)
+        c.set_px(LIGHT, x0 + 1, top - 1)
+    for x in range(left_end + 1, left_end + gap + 1):
+        c.set_px(HELMET, x, top - 1)
+
+
 def face_frame(c, t, stress):
     """B. 영상처럼 셀카 시점의 얼굴 클로즈업: 남색 반모 헬멧(검정 턱끈, 왼쪽 빨간 버클), 청록 티셔츠와 가슴 패치,
-    통통한 볼과 이중턱, 가는 눈, 뾰로통 내민 입. 양 볼살과 턱살이 엇갈려 덜덜 떨림."""
+    통통한 볼과 이중턱, 가는 눈과 검정 뿔테 안경, 뾰로통 내민 입. 양 볼살과 턱살이 엇갈려 덜덜 떨림."""
     w = 2 * math.pi * t
     amp = 0.8 if stress else 0.5
     head = 0.15 * math.sin(4 * w)
@@ -443,8 +491,9 @@ def face_frame(c, t, stress):
     # 통통한 얼굴 (넓고 둥글게)
     c.paint(TAN, ellipse(10, 10 + head, 6.7, 5.2), new_part=True)
     # 검정 턱끈: 볼살 뒤로 지나가서 관자놀이와 턱 밑에만 보임
-    c.paint(HELMET, capsule((3.8, 12.8 + head), (7, 3.8 + head + chin), 0.45))
-    c.paint(HELMET, capsule((16.2, 12.8 + head), (13, 3.8 + head + chin), 0.45))
+    # (Windows는 렌즈가 커서 렌즈 아래부터 그림. 위쪽은 안경 다리에 가려짐)
+    c.paint(HELMET, capsule((4.4, 9.4 + head), (7, 3.8 + head + chin), 0.45))
+    c.paint(HELMET, capsule((15.6, 9.4 + head), (13, 3.8 + head + chin), 0.45))
     # 처진 양 볼살 → 턱살 → 이중턱 (볼과 이중턱은 테두리가 생겨서 살 접힘처럼 보임)
     c.paint(TAN, ellipse(4.9, 7.6 + head + left, 2.7, 2.3), new_part=True)
     c.paint(TAN, ellipse(15.1, 7.6 + head + right, 2.7, 2.3), new_part=True)
@@ -455,12 +504,10 @@ def face_frame(c, t, stress):
     # 왼쪽 턱 아래 빨간 버클
     c.paint(SHIRT, ellipse(6.3, 4.4 + head + chin, 0.8, 0.7), new_part=True)
     # 남색 반모 헬멧: 이마 위만 덮음 + 반짝이
-    helmet_y, dome = 12.8 + head, ellipse(10, 13.8 + head, 7.2, 4.2)
+    helmet_y, dome = 13.8 + head, ellipse(10, 13.8 + head, 7.2, 4.2)
     c.paint(HELMET, Shape(lambda x, y: y > helmet_y and dome.test(x, y), dome.bbox), new_part=True)
     c.paint(LIGHT, ellipse(6.8, 16.2 + head, 1, 0.6))
-    # 가는 눈
-    for ex in (7.4, 12.6):
-        c.paint(DARK, capsule((ex - 0.8, 10.2 + head), (ex + 0.8, 10.2 + head), 0.45))
+    face_glasses(c, 11 + head)
     # 뾰로통 내민 입술 (테두리 없이 분홍 + 가운데 작게 벌린 입)
     mouth_y = 7.8 + head + chin * 0.3
     c.paint(BLUSH, ellipse(10, mouth_y, 0.9 + 0.3 * pout, 0.6))
