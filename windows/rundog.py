@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 
 from PIL import Image
 
@@ -30,14 +31,17 @@ UNIT_H = 18  # 캐릭터 설계 높이 (Mac 메뉴 바 기준 단위)
 (NONE, FAR, BODY, LIGHT, EAR, STRIPE, BLUSH, DARK, HOLE, TONGUE, WHISKER, SWEAT,
  SKIN, SHIRT, PANTS, HAIR, GREEN, JEANS, TAN, HELMET) = range(20)
 OPEN_INKS = (NONE, FAR, WHISKER, SWEAT)
+GLOSSY = (DARK, SWEAT, TONGUE, HOLE)  # 입체 스타일에서 반짝이는 재질 (눈, 코, 혀, 리본)
 
 
 class Shape:
-    """test(x, y)로 안쪽인지 판단하는 도형. bbox로 검사할 픽셀 범위를 줄임."""
+    """test(x, y)로 안쪽인지 판단하는 도형. bbox로 검사할 픽셀 범위를 줄임.
+    h(x, y)는 입체 스타일에서 쓰는 볼록한 높이 (안쪽이면 +, 없으면 납작하게 칠함)."""
 
-    def __init__(self, test, bbox):
+    def __init__(self, test, bbox, h=None):
         self.test = test
         self.bbox = bbox
+        self.h = h
 
 
 class Canvas:
@@ -53,9 +57,13 @@ class Canvas:
         # 몸통·머리·다리 같은 부위 번호. 나중에 그린 부위가 앞에 있어서 경계에 테두리가 생김
         self.part = [0] * (size * size)
         self.parts = 0
+        # 입체 스타일용: 칠한 순서대로 (재질, 도형, 모양을 가진 부위인지, 빈 곳만 칠하는지)
+        self.ops = []
 
     def paint(self, ink, shape, new_part=None, only_empty=False):
         is_part = new_part if new_part is not None else ink in (BODY, FAR)
+        # 무늬(밝은 털, 볼터치)는 색만 바꾸고, 부위·앞발·눈·코·혀는 볼록한 모양을 가짐
+        self.ops.append((ink, shape, is_part or (new_part is False and ink == BODY) or ink in GLOSSY, only_empty))
         if is_part:
             self.parts += 1
         x0, y0, x1, y1 = shape.bbox
@@ -75,6 +83,8 @@ class Canvas:
                 self.ink[i] = ink
 
     def dot(self, ink, p):
+        rad = 0.38 if ink == HOLE else 0.45
+        self.ops.append((ink, ellipse(p[0], p[1], rad, rad), ink != HOLE, False))
         # 아이콘이 작으면 눈 하이라이트가 눈을 통째로 지워서 생략
         if ink == HOLE and self.scale < 0.7:
             return
@@ -164,8 +174,15 @@ def ellipse(cx, cy, rx, ry, tilt=0.0):
         u, v = dx * c + dy * s, -dx * s + dy * c
         return (u * u) / (rx * rx) + (v * v) / (ry * ry) <= 1
 
+    def h(x, y):
+        # 짧은 반지름만큼 솟은 타원체
+        dx, dy = x - cx, y - cy
+        u, v = dx * c + dy * s, -dx * s + dy * c
+        q = 1 - (u * u) / (rx * rx) - (v * v) / (ry * ry)
+        return min(rx, ry) * (math.sqrt(q) if q > 0 else -math.sqrt(-q))
+
     r = max(rx, ry)
-    return Shape(test, (cx - r, cy - r, cx + r, cy + r))
+    return Shape(test, (cx - r, cy - r, cx + r, cy + r), h)
 
 
 def capsule(a, b, r):
@@ -173,12 +190,18 @@ def capsule(a, b, r):
     vx, vy = bx - ax, by - ay
     len2 = vx * vx + vy * vy
 
-    def test(x, y):
+    def dist2(x, y):
         t = max(0.0, min(1.0, ((x - ax) * vx + (y - ay) * vy) / len2)) if len2 > 0 else 0.0
         dx, dy = x - (ax + vx * t), y - (ay + vy * t)
-        return dx * dx + dy * dy <= r * r
+        return dx * dx + dy * dy
 
-    return Shape(test, (min(ax, bx) - r, min(ay, by) - r, max(ax, bx) + r, max(ay, by) + r))
+    def h(x, y):
+        # 둥근 막대 (원기둥 + 반구)
+        q = 1 - dist2(x, y) / (r * r)
+        return r * (math.sqrt(q) if q > 0 else -math.sqrt(-q))
+
+    return Shape(lambda x, y: dist2(x, y) <= r * r,
+                 (min(ax, bx) - r, min(ay, by) - r, max(ax, bx) + r, max(ay, by) + r), h)
 
 
 def triangle(a, b, c):
@@ -189,8 +212,17 @@ def triangle(a, b, c):
         d1, d2, d3 = side(a, b, x, y), side(b, c, x, y), side(c, a, x, y)
         return not ((d1 < 0 or d2 < 0 or d3 < 0) and (d1 > 0 or d2 > 0 or d3 > 0))
 
+    # 가장자리에서 안쪽으로 들어간 거리만큼 둥글게 부풀림 (귀)
+    pts = (a, b, c)
+    sign = 1 if side(a, b, *c) > 0 else -1
+    edges = [(p, (q[0] - p[0]) / math.dist(p, q), (q[1] - p[1]) / math.dist(p, q)) for p, q in zip(pts, pts[1:] + pts[:1])]
+
+    def h(x, y, R=0.9):
+        d = min(sign * (ex * (y - p[1]) - ey * (x - p[0])) for p, ex, ey in edges)
+        return d if d <= 0 else math.sqrt(R * R - (R - min(d, R)) ** 2)
+
     xs, ys = (a[0], b[0], c[0]), (a[1], b[1], c[1])
-    return Shape(test, (min(xs), min(ys), max(xs), max(ys)))
+    return Shape(test, (min(xs), min(ys), max(xs), max(ys)), h)
 
 
 def frame(cx, cy, hw, hh, thickness):
@@ -210,19 +242,28 @@ def union(*shapes):
                 return True
         return False
 
+    def h(x, y):
+        return max((s.h(x, y) for s in shapes if s.h and s.bbox[0] - 0.1 <= x <= s.bbox[2] + 0.1
+                    and s.bbox[1] - 0.1 <= y <= s.bbox[3] + 0.1), default=-9.0)
+
     return Shape(test, (min(s.bbox[0] for s in shapes), min(s.bbox[1] for s in shapes),
-                        max(s.bbox[2] for s in shapes), max(s.bbox[3] for s in shapes)))
+                        max(s.bbox[2] for s in shapes), max(s.bbox[3] for s in shapes)), h)
 
 
 def intersect(a, b):
     return Shape(lambda x, y: a.test(x, y) and b.test(x, y),
-                 (max(a.bbox[0], b.bbox[0]), max(a.bbox[1], b.bbox[1]), min(a.bbox[2], b.bbox[2]), min(a.bbox[3], b.bbox[3])))
+                 (max(a.bbox[0], b.bbox[0]), max(a.bbox[1], b.bbox[1]), min(a.bbox[2], b.bbox[2]), min(a.bbox[3], b.bbox[3])),
+                 (lambda x, y: min(a.h(x, y), b.h(x, y))) if a.h and b.h else None)
 
 
 def fluff(cx, cy, rx, ry, bumps, r):
-    """몽글몽글한 털 뭉치: 타원 둘레에 작은 원을 빙 둘러 붙임."""
-    return union(ellipse(cx, cy, rx, ry), *[ellipse(cx + rx * math.cos(2 * math.pi * k / bumps),
-                                                    cy + ry * math.sin(2 * math.pi * k / bumps), r, r) for k in range(bumps)])
+    """몽글몽글한 털 뭉치: 타원 둘레에 작은 원을 빙 둘러 붙임.
+    입체로는 알갱이마다 볼록하면 구슬 목걸이처럼 보여서, 전체를 큰 돔 하나로 보고 가장자리만 몽글하게."""
+    s = union(ellipse(cx, cy, rx, ry), *[ellipse(cx + rx * math.cos(2 * math.pi * k / bumps),
+                                                 cy + ry * math.sin(2 * math.pi * k / bumps), r, r) for k in range(bumps)])
+    dome, bumpy = ellipse(cx, cy, rx + r, ry + r).h, s.h
+    s.h = lambda x, y: max(dome(x, y), 0.5 * bumpy(x, y))
+    return s
 
 
 def curve(points, r0, r1):
@@ -703,10 +744,10 @@ def fit_box(pet):
     return _fit_boxes[pet]
 
 
-def render_frames(pet, size, stress):
+def render_frames(pet, size, stress, count=FRAME_COUNT):
     box, draw = fit_box(pet), PETS[pet][2]
     frames = []
-    for i in range(FRAME_COUNT):
+    for i in range(count):
         c = Canvas(size, box)
         if pet in dict(BREEDS):
             c.center_on(10)
@@ -727,6 +768,110 @@ def to_image(c, palette=None, mono=(0, 0, 0)):
             else:
                 px[x, c.h - 1 - y] = mono + (int(c.alpha(x, y) * 255),)
     return img
+
+
+# MARK: - 입체 스타일
+# 도형마다 볼록한 높이가 있어서, 빛을 받는 쪽은 밝게·반대쪽은 어둡게, 앞 부위는 뒤 부위에 그림자를 드리움.
+# 픽셀 하나를 SS x SS로 쪼개 칠해서 가장자리가 부드러움. 테두리 선 대신 가장자리만 살짝 어둡게.
+
+SOLID_PETS = [bid for bid, _ in BREEDS]
+BREED_COLORS = {"shiba": "cheese", "corgi": "cheese", "pomeranian": "cheese",
+                "maltese": "cream", "poodle": "choco", "husky": "gray"}  # 자동 색상일 때 견종 고유색
+
+
+def _unit(x, y, z):
+    n = math.sqrt(x * x + y * y + z * z)
+    return x / n, y / n, z / n
+
+
+SUN = _unit(-0.4, 0.45, 1.0)  # 왼쪽 위 앞에서 오는 빛 (y는 위쪽이 +)
+SUN_HALF = _unit(SUN[0], SUN[1], SUN[2] + 1)
+
+
+def _mix(a, b, t):
+    return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+def _solid_sample(ops, x, y, p):
+    """(x, y) 지점의 색. 칠한 순서대로 훑어서 맨 앞 재질과 모양을 정한 뒤 빛을 계산."""
+    ink, under, surf, front = NONE, NONE, None, 0
+    for k, (ik, shape, geom, only_empty) in enumerate(ops):
+        x0, y0, x1, y1 = shape.bbox
+        if not (x0 <= x <= x1 and y0 <= y <= y1) or not shape.test(x, y):
+            continue
+        if only_empty and ink != NONE:
+            continue
+        if geom or ink == NONE:
+            surf, front = shape, k + 1
+        if ik == BLUSH:
+            under = ink
+        ink = ik
+    if ink == NONE:
+        return None
+    if ink == HOLE:
+        return (255.0, 255.0, 255.0)
+
+    n = (0.0, 0.0, 1.0)
+    if surf.h:
+        e = 0.04
+        n = _unit(-(surf.h(x + e, y) - surf.h(x - e, y)) / (2 * e), -(surf.h(x, y + e) - surf.h(x, y - e)) / (2 * e), 1)
+    # 앞에 있는 부위가 빛을 가리면 그림자 (머리 밑 몸통, 앞발 옆 가슴 등)
+    shade = 1.0
+    for dist in (0.63, 1.4):
+        qx, qy = x + SUN[0] * dist, y + SUN[1] * dist
+        for ik, shape, geom, _ in ops[front:]:
+            x0, y0, x1, y1 = shape.bbox
+            if geom and ik not in GLOSSY and x0 <= qx <= x1 and y0 <= qy <= y1 and shape.test(qx, qy):
+                shade *= 0.8
+                break
+
+    def base(ik):
+        return rgb({FAR: darker(p["fill"], 0.72), WHISKER: p["outline"], DARK: 0x24180F, TONGUE: 0xFF6B85,
+                    SWEAT: 0x5DB4F5, LIGHT: p["light"], EAR: p["ear"], STRIPE: p["ear"], BLUSH: 0xFF8FA6}.get(ik, p["fill"]))
+
+    col = _mix(base(under), base(BLUSH), 0.75) if ink == BLUSH else base(ink)
+    ndl = n[0] * SUN[0] + n[1] * SUN[1] + n[2] * SUN[2]
+    ndh = max(0.0, n[0] * SUN_HALF[0] + n[1] * SUN_HALF[1] + n[2] * SUN_HALF[2])
+    light = (0.6 + 0.6 * max(0.0, (ndl + 0.25) / 1.25)) * shade
+    spec = 0.85 * ndh ** 50 if ink in GLOSSY else 0.1 * ndh ** 12
+    col = _mix(tuple(min(255.0, v * light) for v in col), rgb(p["outline"]), (1 - n[2]) ** 2 * 0.35)
+    return tuple(min(255.0, v + 255 * spec * shade) for v in col)
+
+
+def to_solid_image(c, palette, ss=4):
+    img = Image.new("RGBA", (c.w, c.h))
+    px, s = img.load(), c.scale
+    outline = rgb(palette["outline"])
+    for py in range(c.h):
+        uy0, uy1 = py / s - c.oy, (py + 1) / s - c.oy
+        for qx in range(c.w):
+            ux0, ux1 = qx / s - c.ox, (qx + 1) / s - c.ox
+            # 이 픽셀 근처(그림자 거리 포함)에 걸치는 도형만 추려서 검사 횟수를 줄임
+            near = [op for op in c.ops if op[1].bbox[0] <= ux1 + 1.5 and op[1].bbox[2] >= ux0 - 1.5
+                    and op[1].bbox[1] <= uy1 + 1.5 and op[1].bbox[3] >= uy0 - 1.5]
+            if not near:
+                continue
+            acc, hits = [0.0, 0.0, 0.0], 0
+            for sy in range(ss):
+                y = (py + (sy + 0.5) / ss) / s - c.oy
+                for sx in range(ss):
+                    col = _solid_sample(near, (qx + (sx + 0.5) / ss) / s - c.ox, y, palette)
+                    if col:
+                        hits += 1
+                        acc = [a + v for a, v in zip(acc, col)]
+            if hits:
+                col = [a / hits for a in acc]
+                if hits < ss * ss:  # 바깥 가장자리는 테두리 색을 섞어서 밝은 배경에서도 윤곽이 보이게
+                    col = _mix(col, outline, 0.45)
+                px[qx, c.h - 1 - py] = tuple(int(v) for v in col) + (255 * hits // (ss * ss),)
+    return img
+
+
+def frame_image(c, pet, color, solid, mono=(0, 0, 0)):
+    """설정에 맞는 한 프레임. 입체는 견종 강아지만, 자동 색상이면 견종 고유색으로."""
+    if solid and pet in SOLID_PETS:
+        return to_solid_image(c, PALETTES.get(color) or PALETTES[BREED_COLORS[pet]])
+    return to_image(c, PALETTES.get(color), mono)
 
 
 def write_preview(path, sizes=(16, 20, 24, 32)):
@@ -825,6 +970,7 @@ class GPUReader:
 # MARK: - Windows 설정 (테마, 자동 실행, 저장)
 
 SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "RunDog", "settings.json")
+LOG_PATH = os.path.join(os.path.dirname(SETTINGS_PATH), "error.log")
 DEFAULTS = {"cpu": {"pet": "dog", "color": "auto"}, "gpu": {"pet": "cat", "color": "auto"}}
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -844,6 +990,25 @@ def save_settings(settings):
     os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
     with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
+
+
+def log_error(text):
+    """창 없는 exe라 오류가 보이지 않으니 %APPDATA%\\RunDog\\error.log에 남김 (100KB 넘으면 새로 시작)."""
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        mode = "w" if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 100_000 else "a"
+        with open(LOG_PATH, mode, encoding="utf-8") as f:
+            f.write("[%s] v%s\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), VERSION, text.rstrip()))
+    except OSError:
+        pass
+
+
+def wait_for_taskbar(timeout=120):
+    """로그인 직후 자동 실행되면 작업 표시줄이 아직 없을 수 있어서, 생길 때까지 기다림."""
+    find = ctypes.windll.user32.FindWindowW
+    end = time.time() + timeout
+    while not find("Shell_TrayWnd", None) and time.time() < end:
+        time.sleep(1)
 
 
 def taskbar_is_light():
@@ -1012,6 +1177,19 @@ class PetTray:
                 if self.visible and self._hwnd:
                     self._message(win32.NIM_MODIFY, win32.NIF_ICON, hIcon=handle)
 
+            def _show(self):
+                # 로그인 직후엔 작업 표시줄이 바빠서 아이콘 추가가 실패(또는 시간 초과)할 수 있음 → 다시 시도.
+                # 시간 초과여도 실제로는 추가됐을 수 있어서, 바꾸기(MODIFY)가 되면 이미 있는 것으로 봄
+                for _ in range(30):
+                    self._assert_icon_handle()
+                    for code in (win32.NIM_ADD, win32.NIM_MODIFY):
+                        if win32.Shell_NotifyIcon(code, win32.NOTIFYICONDATAW(
+                                cbSize=ctypes.sizeof(win32.NOTIFYICONDATAW), hWnd=self._hwnd, hID=id(self),
+                                uFlags=win32.NIF_MESSAGE | win32.NIF_ICON | win32.NIF_TIP,
+                                uCallbackMessage=win32.WM_NOTIFY, hIcon=self._icon_handle, szTip=self.title)):
+                            return
+                    time.sleep(1)
+
         self.app, self.source, self.read = app, source, read
         self.label = source.upper()
         self.usage = self.speed = 0.0
@@ -1025,13 +1203,14 @@ class PetTray:
     def settings(self):
         return self.app.settings[self.source]
 
-    def frames_for(self, stress):
-        palette = PALETTES.get(self.settings["color"])
+    def frames_for(self, stress, count=FRAME_COUNT):
+        pet, color = self.settings["pet"], self.settings["color"]
         mono = (0, 0, 0) if self.light else (255, 255, 255)
-        return [to_image(c, palette, mono) for c in render_frames(self.settings["pet"], self.app.icon_size, stress)]
+        return [frame_image(c, pet, color, self.settings.get("solid", False), mono)
+                for c in render_frames(pet, self.app.icon_size, stress, count)]
 
     def first_image(self):
-        return self.frames_for(False)[0]
+        return self.frames_for(False, 1)[0]
 
     def rebuild(self):
         new = [[make_hicon(img) for img in self.frames_for(stress)] for stress in (False, True)]
@@ -1063,8 +1242,18 @@ class PetTray:
                 pet_items.append(Menu.SEPARATOR)
             pet_items.append(Item(title, choose("pet", pid), checked=checked("pet", pid), radio=True))
         pets = Menu(*pet_items)
+        def toggle_solid(icon, item):
+            self.settings["solid"] = not self.settings.get("solid", False)
+            save_settings(self.app.settings)
+            self.rebuild()
+            icon.update_menu()
+
+        # 입체는 견종 강아지만 (자동 색상이면 견종 고유색으로 칠함)
         colors = Menu(*[Item(title, choose("color", cid), checked=checked("color", cid), radio=True)
-                        for cid, title in COLOR_CHOICES])
+                        for cid, title in COLOR_CHOICES],
+                      Menu.SEPARATOR,
+                      Item("입체 (견종 강아지)", toggle_solid, checked=lambda item: self.settings.get("solid", False),
+                           enabled=lambda item: self.settings["pet"] in SOLID_PETS))
         def toggle_autostart(icon, item):
             set_autostart(not autostart_enabled())
             icon.update_menu()
@@ -1091,7 +1280,7 @@ class PetTray:
         light = taskbar_is_light()
         if light != self.light:
             self.light = light
-            if self.settings["color"] == "auto":
+            if self.settings["color"] == "auto" and not (self.settings.get("solid") and self.settings["pet"] in SOLID_PETS):
                 self.rebuild()
 
     def animate(self):
@@ -1141,7 +1330,7 @@ class App:
                     self.quit()
                     return
             except Exception:  # 인터넷이 끊겼거나 쓰기 권한이 없으면 다음에 다시
-                pass
+                log_error("업데이트 확인 실패\n" + traceback.format_exc())
             time.sleep(UPDATE_EVERY)
 
     def sample_loop(self):
@@ -1159,7 +1348,10 @@ class App:
     def quit(self):
         self.running = False
         for pet in self.pets:
-            pet.icon.stop()
+            try:
+                pet.icon.stop()
+            except Exception:
+                pass
 
     def run(self):
         threading.Thread(target=self.sample_loop, daemon=True).start()
@@ -1180,6 +1372,9 @@ def selftest():
     handle = make_hicon(img)
     assert handle, "아이콘 핸들 생성 실패"
     print("icon size", tray_icon_size(), "hicon ok")
+    for pet in SOLID_PETS:
+        assert frame_image(render_frames(pet, 24, True, 1)[0], pet, "auto", True).getbbox(), "입체 그리기 실패"
+    print("solid ok")
     cpu, gpu = make_cpu_reader(), GPUReader()
     time.sleep(1)
     print("cpu %.1f%%  gpu %.1f%% (counter ok: %s)" % (cpu(), gpu(), gpu.ok))
@@ -1203,7 +1398,20 @@ def main():
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "--update-test":
         update_test()
-    App().run()
+    # 오류 창 대신 로그를 남기고, 켜자마자 실패하면(로그인 직후 등) 잠시 뒤 다시 시작
+    threading.excepthook = lambda a: log_error("".join(traceback.format_exception(a.exc_type, a.exc_value, a.exc_traceback)))
+    wait_for_taskbar()
+    for _ in range(5):
+        app = None
+        try:
+            app = App()
+            app.run()
+            return
+        except Exception:
+            log_error(traceback.format_exc())
+            if app:
+                app.quit()
+            time.sleep(10)
 
 
 if __name__ == "__main__":

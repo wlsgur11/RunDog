@@ -20,7 +20,25 @@ struct P {
     init(_ x: Double, _ y: Double) { self.x = x; self.y = y }
 }
 
-typealias Shape = (Double, Double) -> Bool
+// test로 안쪽인지 판단하는 도형. height는 입체 스타일에서 쓰는 볼록한 높이 (안쪽이면 +, 없으면 납작하게 칠함)
+struct Shape {
+    let test: (Double, Double) -> Bool
+    var height: ((Double, Double) -> Double)? = nil
+    func callAsFunction(_ x: Double, _ y: Double) -> Bool { test(x, y) }
+}
+
+// 입체 스타일에서 반짝이는 재질 (눈, 코, 혀, 리본)
+let glossyInks: Set<Ink> = [.dark, .sweat, .tongue, .hole]
+
+// 입체 스타일용으로 칠한 순서를 기록: 무늬(밝은 털, 볼터치)는 색만 바꾸고, 부위·앞발·눈·코·혀는 볼록한 모양을 가짐.
+// box는 도형이 걸친 픽셀 범위라 그 밖은 검사하지 않음
+struct PaintOp {
+    let ink: Ink
+    let shape: Shape
+    let solid: Bool
+    let onlyEmpty: Bool
+    var box: (x0: Double, y0: Double, x1: Double, y1: Double)
+}
 
 struct Canvas {
     let w: Int
@@ -29,6 +47,7 @@ struct Canvas {
     // 몸통·머리·다리 같은 부위 번호. 나중에 그린 부위가 앞에 있어서 경계에 테두리가 생김
     var part: [Int]
     var partCount = 0
+    var ops: [PaintOp] = []
 
     init(w: Int) {
         self.w = w
@@ -40,17 +59,27 @@ struct Canvas {
     mutating func paint(_ value: Ink, newPart: Bool? = nil, onlyEmpty: Bool = false, _ shape: Shape) {
         let isPart = newPart ?? (value == .body || value == .far)
         if isPart { partCount += 1 }
+        var box = (x0: Double.infinity, y0: Double.infinity, x1: -Double.infinity, y1: -Double.infinity)
         for y in 0..<h {
             for x in 0..<w where shape(Double(x) + 0.5, Double(y) + 0.5) {
+                box = (min(box.x0, Double(x)), min(box.y0, Double(y)), max(box.x1, Double(x + 1)), max(box.y1, Double(y + 1)))
                 let i = y * w + x
                 if onlyEmpty && ink[i] != .none { continue }
                 if isPart || ink[i] == .none { part[i] = partCount }
                 ink[i] = value
             }
         }
+        // 픽셀 중심에 안 걸려도 반 픽셀 안쪽 가장자리는 입체에서 칠해질 수 있어서 1칸 넓힘
+        if box.x0 <= box.x1 {
+            ops.append(PaintOp(ink: value, shape: shape, solid: isPart || (newPart == false && value == .body) || glossyInks.contains(value),
+                               onlyEmpty: onlyEmpty, box: (box.x0 - 1, box.y0 - 1, box.x1 + 1, box.y1 + 1)))
+        }
     }
 
     mutating func dot(_ value: Ink, _ p: P) {
+        let r = value == .hole ? 0.38 : 0.45
+        ops.append(PaintOp(ink: value, shape: ellipse(p.x, p.y, r, r), solid: value != .hole, onlyEmpty: false,
+                           box: (p.x - r, p.y - r, p.x + r, p.y + r)))
         let x = Int(p.x), y = Int(p.y)
         if (0..<w).contains(x) && (0..<h).contains(y) { ink[y * w + x] = value }
     }
@@ -158,55 +187,80 @@ let palettes: [Palette?] = [
 
 // MARK: - 도형
 
+// 0 안팎으로 매끄럽게 이어지는 볼록한 높이 (안쪽 +, 바깥 -)
+private func dome(_ q: Double, _ r: Double) -> Double { r * (q > 0 ? sqrt(q) : -sqrt(-q)) }
+
 func ellipse(_ cx: Double, _ cy: Double, _ rx: Double, _ ry: Double, tilt: Double = 0) -> Shape {
     let c = cos(tilt), s = sin(tilt)
-    return { x, y in
+    func q(_ x: Double, _ y: Double) -> Double {
         let dx = x - cx, dy = y - cy
         let u = dx * c + dy * s, v = -dx * s + dy * c
-        return (u * u) / (rx * rx) + (v * v) / (ry * ry) <= 1
+        return (u * u) / (rx * rx) + (v * v) / (ry * ry)
     }
+    // 짧은 반지름만큼 솟은 타원체
+    return Shape(test: { x, y in q(x, y) <= 1 }, height: { x, y in dome(1 - q(x, y), min(rx, ry)) })
 }
 
 func capsule(_ a: P, _ b: P, _ r: Double) -> Shape {
-    return { x, y in
-        let vx = b.x - a.x, vy = b.y - a.y
-        let len2 = vx * vx + vy * vy
+    let vx = b.x - a.x, vy = b.y - a.y
+    let len2 = vx * vx + vy * vy
+    func dist2(_ x: Double, _ y: Double) -> Double {
         let t = len2 > 0 ? max(0, min(1, ((x - a.x) * vx + (y - a.y) * vy) / len2)) : 0
         let dx = x - (a.x + vx * t), dy = y - (a.y + vy * t)
-        return dx * dx + dy * dy <= r * r
+        return dx * dx + dy * dy
     }
+    // 둥근 막대 (원기둥 + 반구)
+    return Shape(test: { x, y in dist2(x, y) <= r * r }, height: { x, y in dome(1 - dist2(x, y) / (r * r), r) })
 }
 
 func triangle(_ a: P, _ b: P, _ c: P) -> Shape {
-    return { x, y in
-        func side(_ p: P, _ q: P) -> Double { (q.x - p.x) * (y - p.y) - (q.y - p.y) * (x - p.x) }
-        let d1 = side(a, b), d2 = side(b, c), d3 = side(c, a)
-        return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))
+    func side(_ p: P, _ q: P, _ x: Double, _ y: Double) -> Double { (q.x - p.x) * (y - p.y) - (q.y - p.y) * (x - p.x) }
+    // 가장자리에서 안쪽으로 들어간 거리만큼 둥글게 부풀림 (귀)
+    let sign: Double = side(a, b, c.x, c.y) > 0 ? 1 : -1
+    let edges = [(a, b), (b, c), (c, a)].map { p, q -> (P, Double, Double) in
+        let len = hypot(q.x - p.x, q.y - p.y)
+        return (p, (q.x - p.x) / len, (q.y - p.y) / len)
     }
+    let round = 0.9
+    return Shape(test: { x, y in
+        let d1 = side(a, b, x, y), d2 = side(b, c, x, y), d3 = side(c, a, x, y)
+        return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))
+    }, height: { x, y in
+        let d = edges.map { p, ex, ey in sign * (ex * (y - p.y) - ey * (x - p.x)) }.min()!
+        return d <= 0 ? d : sqrt(round * round - pow(round - min(d, round), 2))
+    })
 }
 
 // 속이 빈 사각 테 (안경알 테두리)
 func frame(_ cx: Double, _ cy: Double, _ hw: Double, _ hh: Double, thickness: Double) -> Shape {
-    return { x, y in
+    return Shape(test: { x, y in
         let dx = abs(x - cx), dy = abs(y - cy)
         return dx <= hw && dy <= hh && (dx > hw - thickness || dy > hh - thickness)
-    }
+    })
 }
 
 func union(_ shapes: [Shape]) -> Shape {
-    return { x, y in shapes.contains { $0(x, y) } }
+    let heights = shapes.compactMap(\.height)
+    return Shape(test: { x, y in shapes.contains { $0(x, y) } },
+                 height: heights.isEmpty ? nil : { x, y in heights.map { $0(x, y) }.max()! })
 }
 
-func intersect(_ a: @escaping Shape, _ b: @escaping Shape) -> Shape {
-    return { x, y in a(x, y) && b(x, y) }
+func intersect(_ a: Shape, _ b: Shape) -> Shape {
+    var shape = Shape(test: { x, y in a(x, y) && b(x, y) })
+    if let ha = a.height, let hb = b.height { shape.height = { x, y in min(ha(x, y), hb(x, y)) } }
+    return shape
 }
 
-// 몽글몽글한 털 뭉치: 타원 둘레에 작은 원을 빙 둘러 붙임
+// 몽글몽글한 털 뭉치: 타원 둘레에 작은 원을 빙 둘러 붙임.
+// 입체로는 알갱이마다 볼록하면 구슬 목걸이처럼 보여서, 전체를 큰 돔 하나로 보고 가장자리만 몽글하게
 func fluff(_ cx: Double, _ cy: Double, _ rx: Double, _ ry: Double, bumps: Int, r: Double) -> Shape {
-    return union([ellipse(cx, cy, rx, ry)] + (0..<bumps).map { k in
+    var shape = union([ellipse(cx, cy, rx, ry)] + (0..<bumps).map { k in
         let a = 2 * Double.pi * Double(k) / Double(bumps)
         return ellipse(cx + rx * cos(a), cy + ry * sin(a), r, r)
     })
+    let outer = ellipse(cx, cy, rx + r, ry + r).height!, bumpy = shape.height!
+    shape.height = { x, y in max(outer(x, y), 0.5 * bumpy(x, y)) }
+    return shape
 }
 
 // 베지어 곡선을 따라가는 굵기가 줄어드는 선 (꼬리, 귀)
@@ -499,7 +553,7 @@ func faceFrame(_ t: Double, stress: Bool) -> Canvas {
     c.paint(.shirt, newPart: true, ellipse(6.3, 4.4 + head + chin, 0.8, 0.7))
     // 남색 반모 헬멧: 이마 위만 덮음 + 반짝이
     let helmetY = 13.8 + head
-    c.paint(.helmet, newPart: true, { x, y in y > helmetY && ellipse(10, 13.8 + head, 7.2, 4.2)(x, y) })
+    c.paint(.helmet, newPart: true, Shape(test: { x, y in y > helmetY && ellipse(10, 13.8 + head, 7.2, 4.2)(x, y) }))
     c.paint(.light, ellipse(6.8, 16.2 + head, 1, 0.6))
     // 검정 뿔테 안경: 5x4픽셀 테 두 개를 가운데 2픽셀 띄우고 코다리로 연결.
     // 렌즈 안은 피부색에 세로로 긴 점 눈 + 반짝이 한 점 (픽셀 격자에 맞게 x.5 위치)
@@ -734,18 +788,164 @@ func makeImage(_ canvas: Canvas, palette: Palette?, mono: RGB? = nil) -> NSImage
     return image
 }
 
-// `RunDog --preview out.png`: 캐릭터별로 [모노, 치즈, 초코+스트레스] 3줄씩 확대한 시트를 PNG로 저장
+// MARK: - 입체 스타일
+// 도형마다 볼록한 높이가 있어서, 빛을 받는 쪽은 밝게·반대쪽은 어둡게, 앞 부위는 뒤 부위에 그림자를 드리움.
+// 레티나 픽셀 하나를 4x4로 쪼개 칠해서 가장자리가 부드러움. 테두리 선 대신 가장자리만 살짝 어둡게
+
+let solidPets: Set<Pet> = [.shiba, .corgi, .pomeranian, .maltese, .poodle, .husky]
+
+// 자동 색상일 때 견종 고유색
+func breedPalette(_ pet: Pet) -> Palette {
+    let id: String
+    switch pet {
+    case .maltese: id = "cream"
+    case .poodle: id = "choco"
+    case .husky: id = "gray"
+    default: id = "cheese"
+    }
+    return palettes.compactMap { $0 }.first { $0.id == id }!
+}
+
+typealias Vec = (x: Double, y: Double, z: Double)
+
+private func unit(_ x: Double, _ y: Double, _ z: Double) -> Vec {
+    let n = sqrt(x * x + y * y + z * z)
+    return (x / n, y / n, z / n)
+}
+
+private let sun = unit(-0.4, 0.45, 1)  // 왼쪽 위 앞에서 오는 빛 (y는 위쪽이 +)
+private let sunHalf = unit(sun.x, sun.y, sun.z + 1)
+
+private func mix(_ a: Vec, _ b: Vec, _ t: Double) -> Vec {
+    (a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
+}
+
+private func vec(_ c: RGB) -> Vec { (Double(c.r), Double(c.g), Double(c.b)) }
+
+// (x, y) 지점의 색. 칠한 순서대로 훑어서 맨 앞 재질과 모양을 정한 뒤 빛을 계산
+private func solidSample(_ ops: [PaintOp], _ x: Double, _ y: Double, _ p: Palette) -> Vec? {
+    var ink = Ink.none, under = Ink.none, surface: Shape?, front = 0
+    for (k, op) in ops.enumerated() where op.box.x0 <= x && x <= op.box.x1 && op.box.y0 <= y && y <= op.box.y1 && op.shape(x, y) {
+        if op.onlyEmpty && ink != .none { continue }
+        if op.solid || ink == .none { surface = op.shape; front = k + 1 }
+        if op.ink == .blush { under = ink }
+        ink = op.ink
+    }
+    guard ink != .none else { return nil }
+    if ink == .hole { return (255, 255, 255) }
+
+    var n: Vec = (0, 0, 1)
+    if let h = surface?.height {
+        let e = 0.04
+        n = unit(-(h(x + e, y) - h(x - e, y)) / (2 * e), -(h(x, y + e) - h(x, y - e)) / (2 * e), 1)
+    }
+    // 앞에 있는 부위가 빛을 가리면 그림자 (머리 밑 몸통, 앞발 옆 가슴 등)
+    var shade = 1.0
+    for dist in [0.63, 1.4] {
+        let qx = x + sun.x * dist, qy = y + sun.y * dist
+        if ops[front...].contains(where: { op in
+            op.solid && !glossyInks.contains(op.ink) && op.box.x0 <= qx && qx <= op.box.x1 && op.box.y0 <= qy && qy <= op.box.y1 && op.shape(qx, qy)
+        }) { shade *= 0.8 }
+    }
+
+    func base(_ ink: Ink) -> Vec {
+        switch ink {
+        case .far: return vec(p.fill.darker(0.72))
+        case .whisker: return vec(p.outline)
+        case .dark: return vec(RGB(0x24180F))
+        case .tongue: return vec(RGB(0xFF6B85))
+        case .sweat: return vec(RGB(0x5DB4F5))
+        case .light: return vec(p.light)
+        case .ear, .stripe: return vec(p.ear)
+        case .blush: return vec(RGB(0xFF8FA6))
+        default: return vec(p.fill)
+        }
+    }
+    var col = ink == .blush ? mix(base(under), base(.blush), 0.75) : base(ink)
+    let ndl = n.x * sun.x + n.y * sun.y + n.z * sun.z
+    let ndh = max(0, n.x * sunHalf.x + n.y * sunHalf.y + n.z * sunHalf.z)
+    let light = (0.6 + 0.6 * max(0, (ndl + 0.25) / 1.25)) * shade
+    let spec = glossyInks.contains(ink) ? 0.85 * pow(ndh, 50) : 0.1 * pow(ndh, 12)
+    col = mix((min(255, col.x * light), min(255, col.y * light), min(255, col.z * light)), vec(p.outline), pow(1 - n.z, 2) * 0.35)
+    let glow = 255 * spec * shade
+    return (min(255, col.x + glow), min(255, col.y + glow), min(255, col.z + glow))
+}
+
+// 위쪽 줄부터 RGBA (알파는 곱하지 않은 값)
+func solidPixels(_ canvas: Canvas, palette: Palette, scale: Int = 2, ss: Int = 4) -> [UInt8] {
+    let w = canvas.w * scale, h = canvas.h * scale, s = Double(scale)
+    var out = [UInt8](repeating: 0, count: w * h * 4)
+    let outline = vec(palette.outline)
+    for py in 0..<h {
+        let uy0 = Double(py) / s, uy1 = Double(py + 1) / s
+        for px in 0..<w {
+            let ux0 = Double(px) / s, ux1 = Double(px + 1) / s
+            // 이 픽셀 근처(그림자 거리 포함)에 걸치는 도형만 추려서 검사 횟수를 줄임
+            let near = canvas.ops.filter { $0.box.x0 <= ux1 + 1.5 && $0.box.x1 >= ux0 - 1.5 && $0.box.y0 <= uy1 + 1.5 && $0.box.y1 >= uy0 - 1.5 }
+            if near.isEmpty { continue }
+            var acc: Vec = (0, 0, 0), hits = 0
+            for sy in 0..<ss {
+                let y = (Double(py) + (Double(sy) + 0.5) / Double(ss)) / s
+                for sx in 0..<ss {
+                    if let c = solidSample(near, (Double(px) + (Double(sx) + 0.5) / Double(ss)) / s, y, palette) {
+                        hits += 1
+                        acc = (acc.x + c.x, acc.y + c.y, acc.z + c.z)
+                    }
+                }
+            }
+            guard hits > 0 else { continue }
+            var col: Vec = (acc.x / Double(hits), acc.y / Double(hits), acc.z / Double(hits))
+            // 바깥 가장자리는 테두리 색을 섞어서 밝은 메뉴 바에서도 윤곽이 보이게
+            if hits < ss * ss { col = mix(col, outline, 0.45) }
+            let i = ((h - 1 - py) * w + px) * 4
+            out[i] = UInt8(col.x); out[i + 1] = UInt8(col.y); out[i + 2] = UInt8(col.z)
+            out[i + 3] = UInt8(255 * hits / (ss * ss))
+        }
+    }
+    return out
+}
+
+func makeSolidImage(_ canvas: Canvas, palette: Palette) -> NSImage {
+    let scale = 2
+    let pixels = solidPixels(canvas, palette: palette, scale: scale)
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: canvas.w * scale, pixelsHigh: canvas.h * scale,
+                               bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                               colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    rep.size = NSSize(width: canvas.w, height: canvas.h)
+    let data = rep.bitmapData!
+    for py in 0..<rep.pixelsHigh {
+        for px in 0..<rep.pixelsWide {
+            let i = (py * rep.pixelsWide + px) * 4, o = py * rep.bytesPerRow + px * 4
+            // 미리 곱한 알파(premultiplied) 형식이라 색에도 알파를 곱함
+            let a = Double(pixels[i + 3]) / 255
+            data[o] = UInt8(Double(pixels[i]) * a); data[o + 1] = UInt8(Double(pixels[i + 1]) * a)
+            data[o + 2] = UInt8(Double(pixels[i + 2]) * a); data[o + 3] = pixels[i + 3]
+        }
+    }
+    let image = NSImage(size: rep.size)
+    image.addRepresentation(rep)
+    return image
+}
+
+// `RunDog --preview out.png`: 캐릭터별로 [모노, 치즈, 초코+스트레스] 3줄씩 확대한 시트를 PNG로 저장.
+// 견종 강아지는 [입체, 입체+스트레스] 2줄을 더 그림 (입체는 레티나 해상도)
 func writePreview(to path: String) {
     let zoom = 8, pad = 4, cols = 8
     let background = RGB(0xECECEC)
     let looks: [(String?, Bool)] = [(nil, false), ("cheese", false), ("choco", true)]
-    var rows: [([Canvas], Palette?)] = []
+    var rows: [([Canvas], Palette?, [[UInt8]]?)] = []
     // PREVIEW_PETS=monkey,dancer 처럼 일부 캐릭터만 볼 수 있음
     let only = ProcessInfo.processInfo.environment["PREVIEW_PETS"]?.split(separator: ",").map(String.init)
     for pet in Pet.allCases where only?.contains(pet.rawValue) ?? true {
         for (id, stress) in looks {
             let frames = pet.canvases(stress: stress)
-            rows.append((stride(from: 0, to: frameCount, by: frameCount / cols).map { frames[$0] }, palettes.first { $0?.id == id } ?? nil))
+            rows.append((stride(from: 0, to: frameCount, by: frameCount / cols).map { frames[$0] }, palettes.first { $0?.id == id } ?? nil, nil))
+        }
+        if solidPets.contains(pet) {
+            for stress in [false, true] {
+                let frames = stride(from: 0, to: frameCount, by: frameCount / cols).map { pet.canvases(stress: stress)[$0] }
+                rows.append((frames, nil, frames.map { solidPixels($0, palette: breedPalette(pet)) }))
+            }
         }
     }
     let cellW = (32 + pad) * zoom, cellH = (gridH + pad) * zoom
@@ -755,11 +955,17 @@ func writePreview(to path: String) {
     let data = rep.bitmapData!
     for py in 0..<rep.pixelsHigh {
         for px in 0..<rep.pixelsWide {
-            let (frames, palette) = rows[py / cellH]
+            let (frames, palette, solid) = rows[py / cellH]
             let canvas = frames[px / cellW]
             let x = (px % cellW) / zoom - pad / 2, y = gridH - 1 - ((py % cellH) / zoom - pad / 2)
             var c = background
-            if (0..<canvas.w).contains(x) && (0..<gridH).contains(y) {
+            if let solid, (0..<canvas.w).contains(x) && (0..<gridH).contains(y) {
+                // 레티나 픽셀(확대 4배)을 배경 위에 알파로 섞음
+                let sx = (px % cellW) / (zoom / 2) - pad, sy = (py % cellH) / (zoom / 2) - pad
+                let i = (sy * canvas.w * 2 + sx) * 4, pixels = solid[px / cellW], a = Double(pixels[i + 3]) / 255
+                func blend(_ v: UInt8, _ b: UInt8) -> UInt8 { UInt8(Double(v) * a + Double(b) * (1 - a)) }
+                c.r = blend(pixels[i], background.r); c.g = blend(pixels[i + 1], background.g); c.b = blend(pixels[i + 2], background.b)
+            } else if (0..<canvas.w).contains(x) && (0..<gridH).contains(y) {
                 if let palette {
                     c = canvas.color(x, y, palette) ?? background
                 } else {
@@ -836,10 +1042,12 @@ final class PetItem: NSObject, NSMenuDelegate {
     private let usageMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let percentMenuItem = NSMenuItem(title: "메뉴 바에 % 표시", action: #selector(togglePercent), keyEquivalent: "")
     private let loginMenuItem = NSMenuItem(title: "로그인 시 자동 실행", action: #selector(toggleLogin), keyEquivalent: "")
+    private let solidMenuItem = NSMenuItem(title: "입체 (견종 강아지)", action: #selector(toggleSolid), keyEquivalent: "")
     private var petMenuItems: [NSMenuItem] = []
     private var colorMenuItems: [NSMenuItem] = []
     private var pet: Pet
     private var palette: Palette?
+    private var solid: Bool
     private var showPercent: Bool
     // 매 프레임 버튼을 다시 그리면 CPU를 많이 먹어서, 버튼 위에 레이어를 얹고 그림만 갈아 끼움
     private let animationLayer = CALayer()
@@ -856,6 +1064,7 @@ final class PetItem: NSObject, NSMenuDelegate {
         let defaults = UserDefaults.standard
         pet = Pet(rawValue: defaults.string(forKey: source.key("pet")) ?? "") ?? source.defaultPet
         palette = palettes.first { $0?.id == defaults.string(forKey: source.key("color")) } ?? nil
+        solid = defaults.bool(forKey: source.key("solid"))
         showPercent = defaults.bool(forKey: source.key("showPercent"))
         super.init()
     }
@@ -887,12 +1096,18 @@ final class PetItem: NSObject, NSMenuDelegate {
         let mono = dark ? RGB(0xFFFFFF) : RGB(0x000000)
         let canvases = [false, true].map { pet.canvases(stress: $0) }
         frames = canvases.map { set in
-            set.map { makeImage($0, palette: palette, mono: mono).cgImage(forProposedRect: nil, context: nil, hints: nil)! }
+            set.map { image(for: $0, palette: palette, mono: mono).cgImage(forProposedRect: nil, context: nil, hints: nil)! }
         }
         // 버튼에는 같은 크기의 빈 그림만 넣어 자리를 잡아 둠
         button.image = NSImage(size: NSSize(width: canvases[0][0].w, height: gridH))
         layoutAnimationLayer()
         animationLayer.contents = frames[0][0]
+    }
+
+    // 입체는 견종 강아지만 (자동 색상이면 견종 고유색으로 칠함)
+    private func image(for canvas: Canvas, palette: Palette?, mono: RGB? = nil) -> NSImage {
+        if solid && solidPets.contains(pet) { return makeSolidImage(canvas, palette: palette ?? breedPalette(pet)) }
+        return makeImage(canvas, palette: palette, mono: mono)
     }
 
     private func layoutAnimationLayer() {
@@ -935,6 +1150,10 @@ final class PetItem: NSObject, NSMenuDelegate {
             colorMenu.addItem(item)
             colorMenuItems.append(item)
         }
+        colorMenu.addItem(.separator())
+        solidMenuItem.target = self
+        colorMenu.addItem(solidMenuItem)
+        colorMenu.autoenablesItems = false
         let colorItem = NSMenuItem(title: "색상", action: nil, keyEquivalent: "")
         colorItem.submenu = colorMenu
         menu.addItem(colorItem)
@@ -959,10 +1178,13 @@ final class PetItem: NSObject, NSMenuDelegate {
 
     private func refreshMenuState() {
         for item in petMenuItems { item.state = item.representedObject as? String == pet.rawValue ? .on : .off }
+        let swatch = pet.canvases(stress: false)[0]
         for (item, p) in zip(colorMenuItems, palettes) {
             item.state = p?.id == palette?.id ? .on : .off
-            item.image = p.map { makeImage(pet.canvases(stress: false)[0], palette: $0) }
+            item.image = p.map { image(for: swatch, palette: $0) }
         }
+        solidMenuItem.state = solid ? .on : .off
+        solidMenuItem.isEnabled = solidPets.contains(pet)
         percentMenuItem.state = showPercent ? .on : .off
         loginMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
@@ -1005,6 +1227,12 @@ final class PetItem: NSObject, NSMenuDelegate {
         guard let id = sender.representedObject as? String else { return }
         palette = palettes.first { $0?.id == id } ?? nil
         UserDefaults.standard.set(id, forKey: source.key("color"))
+        rebuildFrames()
+    }
+
+    @objc private func toggleSolid() {
+        solid.toggle()
+        UserDefaults.standard.set(solid, forKey: source.key("solid"))
         rebuildFrames()
     }
 
