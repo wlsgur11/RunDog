@@ -1259,8 +1259,16 @@ def load_settings():
         with open(SETTINGS_PATH, encoding="utf-8") as f:
             for source, values in json.load(f).items():
                 settings.setdefault(source, {}).update(values)
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         pass
+    # 다른 버전이 저장한 모르는 캐릭터·색상이면 기본값으로 (이 버전에 없는 이름 때문에 꺼지지 않게)
+    for source, defaults in DEFAULTS.items():
+        values = settings[source] if isinstance(settings.get(source), dict) else {}
+        if values.get("pet") not in PETS:
+            values["pet"] = defaults["pet"]
+        if values.get("color") not in dict(COLOR_CHOICES):
+            values["color"] = defaults["color"]
+        settings[source] = values
     return settings
 
 
@@ -1313,6 +1321,19 @@ def autostart_enabled():
             return True
     except OSError:
         return False
+
+
+def fix_autostart():
+    """자동 실행이 다른 곳의 RunDog.exe(예: 예전에 받은 옛 버전)를 가리키면 지금 실행 중인 exe로 바꿈.
+    옛 버전은 새 캐릭터를 몰라서 로그인 때 오류로 꺼지고, 자동 업데이트도 못 함."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            command = winreg.QueryValueEx(k, "RunDog")[0]
+        if os.path.normcase(command) != os.path.normcase(launch_command()):
+            set_autostart(True)
+    except OSError:
+        pass
 
 
 def set_autostart(enabled):
@@ -1621,6 +1642,7 @@ class App:
         if not getattr(sys, "frozen", False):
             return
         remove_old_exe()
+        fix_autostart()
         if self.just_updated:
             try:
                 self.pets[0].icon.notify("v%s로 업데이트했어요" % VERSION, "RunDog")
