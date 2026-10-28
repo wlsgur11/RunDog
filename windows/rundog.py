@@ -14,11 +14,13 @@ import ctypes
 import json
 import math
 import os
+import random
 import sys
 import tempfile
 import threading
 import time
 import traceback
+from contextlib import contextmanager
 
 from PIL import Image
 
@@ -59,8 +61,20 @@ class Canvas:
         self.parts = 0
         # 입체 스타일용: 칠한 순서대로 (재질, 도형, 모양을 가진 부위인지, 빈 곳만 칠하는지)
         self.ops = []
+        # with c.rotated(...) 안에서 그리는 도형은 돌려서 찍음 (고개 갸웃, 엉덩이 실룩, 몸 털기)
+        self.rotations = []
+
+    @contextmanager
+    def rotated(self, cx, cy, a):
+        self.rotations.append((cx, cy, a))
+        try:
+            yield
+        finally:
+            self.rotations.pop()
 
     def paint(self, ink, shape, new_part=None, only_empty=False):
+        for cx, cy, a in reversed(self.rotations):
+            shape = rotate(shape, cx, cy, a)
         is_part = new_part if new_part is not None else ink in (BODY, FAR)
         # 무늬(밝은 털, 볼터치)는 색만 바꾸고, 부위·앞발·눈·코·혀는 볼록한 모양을 가짐
         self.ops.append((ink, shape, is_part or (new_part is False and ink == BODY) or ink in GLOSSY, only_empty))
@@ -83,6 +97,9 @@ class Canvas:
                 self.ink[i] = ink
 
     def dot(self, ink, p):
+        for cx, cy, a in reversed(self.rotations):
+            c, s = math.cos(a), math.sin(a)
+            p = (cx + (p[0] - cx) * c - (p[1] - cy) * s, cy + (p[0] - cx) * s + (p[1] - cy) * c)
         rad = 0.38 if ink == HOLE else 0.45
         self.ops.append((ink, ellipse(p[0], p[1], rad, rad), ink != HOLE, False))
         # 아이콘이 작으면 눈 하이라이트가 눈을 통째로 지워서 생략
@@ -161,7 +178,24 @@ PALETTES = {
     "black": dict(title="까망 (턱시도)", fill=0x3C3C44, outline=0x141418, light=0xF2F2F5, ear=0x25252B, dark=0x0E0E10),
     "gray": dict(title="회색", fill=0xA8ABB3, outline=0x44474F, light=0xF1F1F4, ear=0x777B85, dark=0x1C1D22),
 }
-COLOR_CHOICES = [("auto", "자동 (작업 표시줄 색)")] + [(k, v["title"]) for k, v in PALETTES.items()]
+# 견종 강아지의 실제 털색 ("견종 털색"을 고르거나, 자동 색상에서 입체를 켜면 씀)
+COATS = {
+    "shiba": dict(fill=0xD9813A, outline=0x5A2D12, light=0xFFF5E6, ear=0xF3C9A0, dark=0x1C1410),  # 적갈색 + 하얀 볼
+    "corgi": dict(fill=0xE29A4F, outline=0x5E3416, light=0xFFFFFF, ear=0xC9773A, dark=0x1C1410),  # 레드 & 화이트
+    "pomeranian": dict(fill=0xF0A04B, outline=0x6A3A12, light=0xFFE7C2, ear=0xD9822F, dark=0x1C1410),  # 오렌지
+    "maltese": dict(fill=0xFFFFFF, outline=0x9C8A78, light=0xFFFFFF, ear=0xF4EDE3, dark=0x1A1414),  # 순백색
+    "poodle": dict(fill=0xB4602E, outline=0x4E230C, light=0xE4A87A, ear=0x96491F, dark=0x170D08),  # 레드 브라운
+    "husky": dict(fill=0x555B66, outline=0x1F2228, light=0xFFFFFF, ear=0x3E434C, dark=0x101114),  # 진회색 + 하얀 가면
+}
+COLOR_CHOICES = ([("auto", "자동 (작업 표시줄 색)"), ("coat", "견종 털색")] +
+                 [(k, v["title"]) for k, v in PALETTES.items()])
+
+
+def palette_for(pet, color, solid=False):
+    """견종 털색(또는 자동 색상의 입체)이면 견종마다 실제 털색. 견종이 아니면 치즈색으로."""
+    if color == "coat" or (solid and color == "auto"):
+        return COATS.get(pet, PALETTES["cheese"])
+    return PALETTES.get(color)
 
 
 # MARK: - 도형
@@ -264,6 +298,21 @@ def fluff(cx, cy, rx, ry, bumps, r):
     dome, bumpy = ellipse(cx, cy, rx + r, ry + r).h, s.h
     s.h = lambda x, y: max(dome(x, y), 0.5 * bumpy(x, y))
     return s
+
+
+def rotate(shape, cx, cy, a):
+    """(cx, cy)를 중심으로 a만큼 돌린 도형."""
+    c, s = math.cos(a), math.sin(a)
+
+    def back(x, y):
+        dx, dy = x - cx, y - cy
+        return cx + dx * c + dy * s, cy - dx * s + dy * c
+
+    x0, y0, x1, y1 = shape.bbox
+    pts = [(cx + (x - cx) * c - (y - cy) * s, cy + (x - cx) * s + (y - cy) * c) for x in (x0, x1) for y in (y0, y1)]
+    return Shape(lambda x, y: shape.test(*back(x, y)),
+                 (min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts)),
+                 (lambda x, y: shape.h(*back(x, y))) if shape.h else None)
 
 
 def curve(points, r0, r1):
@@ -405,107 +454,330 @@ def horse_frame(c, t, stress):
     c.paint(DARK, ellipse(29.5 + HX, 12.2 + hb, 0.45, 0.45))
 
 
-def breed_frame(breed, c, t, stress):
-    """앉아서 꼬리를 흔들며 앞발을 번갈아 콩콩 드는 강아지 (정면). 견종마다 귀·무늬·꼬리·털이 다름.
-    바쁠수록 더 신나게 흔들고, 40%를 넘으면 혀를 내밀고 헥헥."""
-    w = 2 * math.pi * t
-    # 눈·코가 좌우 대칭으로 또렷하게 찍히도록 머리는 가운데 고정, 위아래도 1칸씩만 움직임
-    hx, hy = 10.0, 10.5 + (1 if math.sin(2 * w) > 0.2 else 0)
-    wag = math.sin(4 * w)
-    flop = 0.5 * math.sin(2 * w - 1.6)  # 늘어진 귀는 머리보다 한 박자 늦게 출렁
-    lift = (1.0 if math.sin(w) > 0.3 else 0.0, 1.0 if math.sin(w) < -0.3 else 0.0)
-    marked = breed in ("shiba", "corgi", "husky")  # 흰 주둥이·가슴·양말 무늬
+# 견종 강아지: 견종마다 실제 강아지가 자주 하는 대표 행동 하나를 반복하고,
+# 사이사이 가끔 몸 털기·하품·손!을 함 (EXTRAS). 귀여운 부분은 크게 보이게 견종마다 구도가 다름
 
-    # 꼬리 (몸 뒤)
-    if breed in ("shiba", "husky"):
-        # 등 위로 돌돌 말린 꼬리
-        c.paint(BODY, ellipse(16.2 + 0.8 * wag, 5.8, 2.2, 2))
-        c.paint(LIGHT, ellipse(16.4 + 0.8 * wag, 5.6, 0.9, 0.8))
-    elif breed in ("pomeranian", "maltese"):
-        # 복슬복슬한 깃털 꼬리
-        c.paint(BODY, fluff(16 + 0.9 * wag, 6, 1.6, 1.3, 7, 1))
-    elif breed == "poodle":
-        # 끝에 방울이 달린 꼬리
-        c.paint(BODY, union(capsule((13.5, 4), (16 + 0.8 * wag, 6.4), 0.6), fluff(16.2 + 0.9 * wag, 6.8, 0.9, 0.9, 6, 0.8)))
-    # 코기는 꼬리 대신 엉덩이를 씰룩
-    # 뒷발 + 앉은 몸통 + 가슴
+def pointy_ears(hx, hy, base, tip, spread, inner=False):
+    """머리 양쪽의 뾰족 귀. inner면 그 안쪽의 밝은 귓속."""
+    if inner:
+        return union(triangle((hx - spread + 0.9, hy + base + 1.3), (hx - spread + 1.3, hy + tip - 1.3), (hx - 2.8, hy + base + 2.2)),
+                     triangle((hx + spread - 0.9, hy + base + 1.3), (hx + spread - 1.3, hy + tip - 1.3), (hx + 2.8, hy + base + 2.2)))
+    return union(triangle((hx - spread, hy + base), (hx - spread + 0.9, hy + tip), (hx - 1.7, hy + base + 2.1)),
+                 triangle((hx + spread, hy + base), (hx + spread - 0.9, hy + tip), (hx + 1.7, hy + base + 2.1)))
+
+
+def dog_eye(c, ex, ey, kind="open", rx=0.9, ry=1.0, ink=DARK):
+    """open: 동그란 눈 + 반짝이, happy: ^^, closed: 감은 눈."""
+    if kind == "happy":
+        c.paint(DARK, curve([(ex - rx - 0.1, ey - 0.5), (ex, ey + 1.1), (ex + rx + 0.1, ey - 0.5)], 0.38, 0.38), new_part=False)
+    elif kind == "closed":
+        c.paint(DARK, curve([(ex - rx - 0.1, ey + 0.2), (ex, ey - 0.8), (ex + rx + 0.1, ey + 0.2)], 0.34, 0.34), new_part=False)
+    else:
+        c.paint(ink, ellipse(ex, ey, rx, ry), new_part=False)
+        if ink == SWEAT:  # 허스키 파란 눈의 동공
+            c.dot(DARK, (ex + 0.4, ey - 0.4))
+        c.dot(HOLE, (ex - rx * 0.45, ey + ry * 0.45))
+
+
+def w_mouth(c, x, y, s=1.0):
+    """ω 입."""
+    for sx in (-1, 1):
+        c.paint(DARK, curve([(x, y + 0.1), (x + sx * 0.7 * s, y - 0.6 * s), (x + sx * 1.4 * s, y)], 0.24, 0.24), new_part=False)
+
+
+def breed_tail(c, breed, wag, x=16.2, y=5.8):
+    if breed in ("shiba", "husky"):  # 등 위로 돌돌 말린 꼬리
+        c.paint(BODY, ellipse(x + 0.8 * wag, y, 2.2, 2))
+        c.paint(LIGHT, ellipse(x + 0.2 + 0.8 * wag, y - 0.2, 0.9, 0.8))
+    elif breed in ("pomeranian", "maltese"):  # 복슬복슬한 깃털 꼬리
+        c.paint(BODY, fluff(x - 0.2 + 0.9 * wag, y + 0.2, 1.6, 1.3, 7, 1))
+    elif breed == "poodle":  # 끝에 방울이 달린 꼬리
+        c.paint(BODY, union(capsule((x - 2.7, y - 1.8), (x - 0.2 + 0.8 * wag, y + 0.6), 0.6),
+                            fluff(x + 0.9 * wag, y + 1, 0.9, 0.9, 6, 0.8)))
+    # 코기는 꼬리가 없음
+
+
+def sitting_body(c, breed, paws=True):
+    """앉은 몸통 + 뒷발 (+ 앞발 두 개). 시바·코기·허스키는 흰 가슴·양말."""
+    marked = breed in ("shiba", "corgi", "husky")
     for fx in (5.9, 14.1):
         c.paint(BODY, ellipse(fx, 1.4, 1.9, 1.3))
         if marked:
             c.paint(LIGHT, ellipse(fx, 1.3, 1.2, 0.7))
-    c.paint(BODY, ellipse(10, 4.4, 4.6, 3.9, tilt=0.12 * wag if breed == "corgi" else 0))
+    c.paint(BODY, ellipse(10, 4.4, 4.6, 3.9))
     if marked:
         c.paint(LIGHT, ellipse(10, 4.4, 2.4, 2.8))
-    # 번갈아 콩콩 드는 앞발
-    for lx, up in zip((8.2, 11.8), lift):
-        paw = (lx, 1.2 + up)
-        c.paint(BODY, union(capsule((lx, 5), paw, 1.05), ellipse(lx, paw[1], 1.3, 0.95)), new_part=False)
+    for lx in (8.2, 11.8) if paws else (8.2,):
+        c.paint(BODY, union(capsule((lx, 5), (lx, 1.2), 1.05), ellipse(lx, 1.2, 1.3, 0.95)), new_part=False)
         if marked:
-            c.paint(LIGHT, ellipse(lx, paw[1], 0.9, 0.6))
+            c.paint(LIGHT, ellipse(lx, 1.2, 0.9, 0.6))
 
-    # 머리. 뾰족 귀는 머리와 한 덩어리로 그려서 사이에 선이 안 생기게 함
-    def pointy_ears(base, tip, spread):
-        return union(triangle((hx - spread, hy + base), (hx - spread + 0.9, hy + tip), (hx - 1.7, hy + base + 2.1)),
-                     triangle((hx + spread, hy + base), (hx + spread - 0.9, hy + tip), (hx + 1.7, hy + base + 2.1)))
 
-    def inner_ears(base, tip, spread):
-        return union(triangle((hx - spread + 0.9, hy + base + 1.3), (hx - spread + 1.3, hy + tip - 1.3), (hx - 2.8, hy + base + 2.2)),
-                     triangle((hx + spread - 0.9, hy + base + 1.3), (hx + spread - 1.3, hy + tip - 1.3), (hx + 2.8, hy + base + 2.2)))
-
-    eye_x, eye_y = 3.0, hy - 0.5
+def breed_head(c, breed, hx, hy, eyes="open", mouth="closed"):
+    """앉은 자세용 정면 머리. 코의 y를 돌려줌 (입을 따로 그릴 때)."""
+    eye_y = hy - 0.5
     head = ellipse(hx, hy, 6.1, 4.8)
     if breed in ("shiba", "husky"):
-        c.paint(BODY, union(head, pointy_ears(1.8, 6.6, 5.6)))
-        c.paint(LIGHT, inner_ears(1.8, 6.6, 5.6))
+        c.paint(BODY, union(head, pointy_ears(hx, hy, 1.8, 6.6, 5.6)))
+        c.paint(LIGHT, pointy_ears(hx, hy, 1.8, 6.6, 5.6, inner=True))
         if breed == "shiba":
-            # 볼과 턱이 하얀 우라지로 + 하얀 눈썹 점
             c.paint(LIGHT, intersect(head, ellipse(hx, hy - 2.6, 4.6, 2.6)))
-            for x in (7.5, 12.5):
-                c.paint(LIGHT, ellipse(x, eye_y + 2.5, 0.5, 0.5))
+            for sx in (-1, 1):
+                c.paint(LIGHT, ellipse(hx + sx * 2.5, eye_y + 2.5, 0.5, 0.5))
         else:
-            # 허스키 가면: 하얀 아랫얼굴 + 이마 가운데 흰 줄 + 눈 위 흰 점
             c.paint(LIGHT, intersect(head, union(ellipse(hx, hy - 2.3, 5.2, 2.8), capsule((hx, hy + 3.4), (hx, hy - 1), 0.7))))
             for sx in (-1, 1):
                 c.paint(LIGHT, ellipse(hx + sx * 2.7, hy + 2, 0.9, 0.6))
     elif breed == "corgi":
-        # 아주 큰 귀 + 이마의 흰 줄 + 흰 주둥이
-        c.paint(BODY, union(head, pointy_ears(1.2, 7.4, 6.1)))
-        c.paint(LIGHT, inner_ears(1.2, 7.4, 6.1))
+        c.paint(BODY, union(head, pointy_ears(hx, hy, 1.2, 7.4, 6.1)))
+        c.paint(LIGHT, pointy_ears(hx, hy, 1.2, 7.4, 6.1, inner=True))
         c.paint(LIGHT, intersect(head, union(ellipse(hx, hy - 2.5, 3.6, 2.4), capsule((hx, hy + 4.6), (hx, hy - 1), 0.8))))
     elif breed == "pomeranian":
-        # 동그란 털 뭉치 + 털 위로 살짝 나온 작은 귀
-        c.paint(BODY, union(fluff(hx, hy - 0.4, 6, 4.8, 16, 1.2), pointy_ears(3.4, 6.4, 3.9)))
+        c.paint(BODY, union(fluff(hx, hy - 0.4, 6, 4.8, 16, 1.2), pointy_ears(hx, hy, 3.4, 6.4, 3.9)))
         c.paint(LIGHT, ellipse(hx, hy - 2.4, 2.6, 1.6))
     elif breed == "maltese":
-        # 길게 늘어진 귀(머리 뒤) + 동그란 하얀 머리 + 정수리 리본
         for sx in (-1, 1):
-            c.paint(BODY, union(capsule((hx + sx * 4.8, hy + 1.6), (hx + sx * 5.9, hy - 3 + flop), 2),
-                                ellipse(hx + sx * 5.9, hy - 3.5 + flop, 2, 1.4)))
+            c.paint(BODY, union(capsule((hx + sx * 4.8, hy + 1.6), (hx + sx * 5.9, hy - 3), 2), ellipse(hx + sx * 5.9, hy - 3.5, 2, 1.4)))
         c.paint(BODY, union(ellipse(hx, hy, 5.3, 4.6), ellipse(hx, hy + 4.2, 1.6, 1.2)))
         c.paint(TONGUE, union(triangle((hx - 2.2, hy + 4.4), (hx - 2.2, hy + 6.4), (hx, hy + 5.4)),
                               triangle((hx + 2.2, hy + 4.4), (hx + 2.2, hy + 6.4), (hx, hy + 5.4))))
     elif breed == "poodle":
-        # 동그란 머리 방울 + 곱슬곱슬 늘어진 귀
         c.paint(BODY, fluff(hx, hy + 4.2, 3, 1.8, 9, 1))
         c.paint(BODY, ellipse(hx, hy - 0.2, 5, 4.5))
         for sx in (-1, 1):
-            c.paint(EAR, fluff(hx + sx * 5.2, hy - 1.6 + flop, 1.3, 2.4, 8, 1), new_part=True)
-    # 2x2 눈(왼쪽 위에 하이라이트), 2x1 코. 허스키는 파란 눈
+            c.paint(EAR, fluff(hx + sx * 5.2, hy - 1.6, 1.3, 2.4, 8, 1), new_part=True)
     for sx in (-1, 1):
-        ex = hx + sx * eye_x
         c.paint(BLUSH, ellipse(hx + sx * 5, eye_y - 1.5, 1, 0.5))
-        c.paint(SWEAT if breed == "husky" else DARK, ellipse(ex, eye_y, 0.9, 1), new_part=False)
-        if breed == "husky":
-            c.dot(DARK, (ex + 0.5, eye_y - 0.5))
-        c.dot(HOLE, (ex - 0.5, eye_y + 0.5))
+        dog_eye(c, hx + sx * 3, eye_y, eyes, ink=SWEAT if breed == "husky" else DARK)
     nose_y = eye_y - 1.5
     c.paint(DARK, ellipse(hx, nose_y, 1, 0.5))
-    if stress:
+    if mouth == "open":  # 벌린 입 + 혀
+        c.paint(DARK, ellipse(hx, nose_y - 1.3, 0.9, 0.75))
+        c.paint(TONGUE, ellipse(hx, nose_y - 1.65, 0.65, 0.4))
+    elif mouth == "tongue":
         c.paint(TONGUE, capsule((hx, nose_y - 1), (hx, nose_y - 2), 0.75))
+    return nose_y
+
+
+def shiba_frame(c, t, stress):
+    """시바: 얼굴을 크게, 헥헥 웃다가(^^) 가끔 동그란 눈으로 쳐다봄. 말린 꼬리가 머리 뒤로 삐죽."""
+    w = 2 * math.pi * t
+    wag = math.sin(4 * w)
+    smile = math.sin(w) > -0.35
+    hx, hy = 10.0, 8.6 + (0.4 if math.sin(2 * w) > 0 else 0)
+    c.paint(BODY, ellipse(16.4 + 0.7 * wag, 4.2, 2.5, 2.3))
+    c.paint(LIGHT, ellipse(16.6 + 0.7 * wag, 4.0, 1.05, 0.95))
+    c.paint(BODY, ellipse(10, 1.0, 6.6, 2.8))
+    c.paint(LIGHT, ellipse(10, 1.0, 3.4, 2.2))
+    head = ellipse(hx, hy, 7.6, 6.0)
+    c.paint(BODY, union(head, pointy_ears(hx, hy, 2.4, 8.4, 6.9)))
+    c.paint(LIGHT, pointy_ears(hx, hy, 2.4, 8.4, 6.9, inner=True))
+    c.paint(LIGHT, intersect(head, ellipse(hx, hy - 3.4, 6.0, 3.6)))  # 우라지로 (하얀 볼·턱)
+    for sx in (-1, 1):
+        c.paint(LIGHT, ellipse(hx + sx * 3.3, hy + 3.0, 0.75, 0.6))  # 눈썹 점
+        c.paint(BLUSH, ellipse(hx + sx * 5.5, hy - 1.4, 1.2, 0.6))
+        dog_eye(c, hx + sx * 3.5, hy + 0.6, "happy" if smile else "open", 1.05, 1.2)
+    c.paint(DARK, ellipse(hx, hy - 1.2, 1.2, 0.65))
+    if stress:
+        c.paint(DARK, ellipse(hx, hy - 2.8, 1.3, 1.0))
+        c.paint(TONGUE, capsule((hx, hy - 3.2), (hx, hy - 4.6), 0.9))
+    elif smile:
+        c.paint(DARK, ellipse(hx, hy - 2.8, 1.3, 1.0))
+        c.paint(TONGUE, ellipse(hx, hy - 3.2, 0.95, 0.55))
+    else:
+        w_mouth(c, hx, hy - 1.9)
+
+
+def corgi_frame(c, t, stress):
+    """코기: 뒤돌아 짧은 다리로 종종 걸으며 식빵 엉덩이를 실룩, 가끔 어깨 너머로 돌아봄."""
+    w = 2 * math.pi * t
+    for k, fx in enumerate((6.4, 13.6)):
+        up = 0.7 * max(0.0, math.sin(2 * w + k * math.pi))
+        c.paint(BODY, union(capsule((fx, 3), (fx, 0.9 + up), 1.3), ellipse(fx, 0.9 + up, 1.7, 1.1)))
+        c.paint(LIGHT, ellipse(fx, 0.8 + up, 1.1, 0.6))
+    hx, hy = 10.8, 12.6
+    head = ellipse(hx, hy, 4.6, 3.6)
+    c.paint(BODY, union(head, pointy_ears(hx, hy, 0.8, 5.2, 4.7)))
+    c.paint(LIGHT, pointy_ears(hx, hy, 0.8, 5.2, 4.7, inner=True))
+    if math.sin(w) > -0.2:
+        c.paint(LIGHT, intersect(head, ellipse(hx + 3.4, hy - 1.4, 2.6, 2)))
+        dog_eye(c, hx + 2.4, hy + 0.2, "happy" if stress else "open", 0.8, 0.9)
+        c.paint(DARK, ellipse(hx + 4.4, hy - 1.0, 0.65, 0.5))
+        c.paint(BLUSH, ellipse(hx + 2.8, hy - 1.4, 0.8, 0.45))
+    c.paint(BODY, ellipse(10, 8.2, 5.2, 4.2))  # 등
+    with c.rotated(10, 1.2, 0.13 * math.sin(2 * w)):
+        for sx in (-1, 1):
+            cheek = ellipse(10 + sx * 2.35, 4.6, 3.5, 3.9)
+            c.paint(BODY, cheek)
+            c.paint(LIGHT, intersect(cheek, fluff(10, 1.6, 5.4, 2.6, 12, 0.9)))  # 하얀 털바지
+        c.paint(BODY, ellipse(10, 8.0, 1.0, 0.8), new_part=True)  # 짧은 꽁지
+        if stress:
+            c.paint(SWEAT, ellipse(15.6, 10.4, 0.6, 0.9), new_part=True)
+
+
+def pomeranian_frame(c, t, stress):
+    """포메: 동그란 솜뭉치가 반가워서 깡총깡총. 착지할 땐 납작, 뛰어오르면 ^^."""
+    w = 2 * math.pi * t
+    wag = math.sin(4 * w)
+    s = abs(math.sin(2 * w))
+    hop, squash = 1.8 * s, max(0.0, 1 - 3 * s)
+    cx, cy = 10.0, 7.0 + hop
+    rx, ry = 6.2 * (1 + 0.1 * squash), 5.6 * (1 - 0.1 * squash)
+    c.paint(BODY, fluff(15.4 + 0.8 * wag, cy + 3.4, 1.9, 1.6, 7, 1.1))
+    for fx in (7.6, 12.4):
+        c.paint(BODY, ellipse(fx, cy - ry - 0.2, 1.4, 0.9))
+    c.paint(BODY, union(fluff(cx, cy, rx, ry, 18, 1.3), pointy_ears(cx, cy, ry - 0.6, ry + 3.6, 3.8)))
+    c.paint(LIGHT, pointy_ears(cx, cy, ry - 0.6, ry + 3.6, 3.8, inner=True))
+    c.paint(LIGHT, ellipse(cx, cy - 1.7, 2.6, 1.8))
+    for sx in (-1, 1):
+        c.paint(BLUSH, ellipse(cx + sx * 3.9, cy - 1.0, 0.9, 0.5))
+        dog_eye(c, cx + sx * 2.3, cy + 0.4, "happy" if hop > 1.2 else "open", 0.85, 0.95)
+    c.paint(DARK, ellipse(cx, cy - 1.0, 0.8, 0.45))
+    if stress:
+        c.paint(TONGUE, capsule((cx, cy - 1.9), (cx, cy - 2.8), 0.6))
+    else:
+        w_mouth(c, cx, cy - 1.6, 0.7)
+
+
+def maltese_frame(c, t, stress):
+    """말티즈: 큰 얼굴로 소리를 듣고 갸웃갸웃, 긴 귀가 팔랑. 가끔 메롱."""
+    w = 2 * math.pi * t
+    flap = 0.7 * math.sin(2 * w - 1)
+    hx, hy = 10.0, 9.4
+    c.paint(BODY, ellipse(10, 1.2, 5.2, 2.6))
+    with c.rotated(10, 3.0, 0.15 * max(-1.0, min(1.0, 1.8 * math.sin(w)))):
+        for sx in (-1, 1):
+            c.paint(BODY, union(capsule((hx + sx * 4.6, hy + 1.8), (hx + sx * 6.4, hy - 5.2 + flap * sx), 2.2),
+                                fluff(hx + sx * 6.4, hy - 5.6 + flap * sx, 1.9, 1.3, 7, 0.8)))
+        c.paint(BODY, union(ellipse(hx, hy, 6.0, 5.4), fluff(hx, hy + 5.0, 2.2, 1.1, 8, 0.9)))
+        c.paint(TONGUE, union(triangle((hx - 2.6, hy + 5.4), (hx - 2.6, hy + 7.8), (hx, hy + 6.6)),
+                              triangle((hx + 2.6, hy + 5.4), (hx + 2.6, hy + 7.8), (hx, hy + 6.6))))
+        c.paint(TONGUE, ellipse(hx, hy + 6.6, 0.7, 0.7))
+        for sx in (-1, 1):
+            c.paint(BLUSH, ellipse(hx + sx * 4.4, hy - 1.9, 1.1, 0.55))
+            dog_eye(c, hx + sx * 2.8, hy - 0.1, "happy" if math.sin(w) < -0.8 else "open", 1.2, 1.35)
+        c.paint(DARK, ellipse(hx, hy - 2.1, 1.0, 0.6))
+        if stress or math.sin(w) > 0.7:
+            c.paint(TONGUE, capsule((hx, hy - 3.1), (hx, hy - 3.9), 0.7))
+
+
+def poodle_frame(c, t, stress):
+    """푸들: 곰돌이 컷 얼굴로 두 발로 서서 앞발을 모으고 까딱까딱 (앙)."""
+    w = 2 * math.pi * t
+    wag = math.sin(4 * w)
+    bob = 0.6 * math.sin(2 * w)
+    flop = 0.4 * math.sin(2 * w - 1.2)
+    c.paint(BODY, fluff(14.8 + 0.6 * wag, 4.2, 1.1, 1.1, 7, 0.8))
+    for fx in (7.8, 12.2):
+        c.paint(BODY, fluff(fx, 1.5, 1.3, 1.1, 7, 0.7))
+    c.paint(BODY, fluff(10, 5.4 + bob * 0.3, 3.5, 3.4, 12, 1.0))
+    hy = 11.5 + bob
+    for sx in (-1, 1):
+        c.paint(EAR, fluff(10 + sx * 5.2, hy - 0.8 + flop, 1.5, 2.2, 9, 0.9), new_part=True)
+    c.paint(BODY, fluff(10, hy, 4.7, 4.2, 16, 1.0))
+    c.paint(LIGHT, ellipse(10, hy - 1.9, 2.3, 1.6))
+    for sx in (-1, 1):
+        c.paint(BLUSH, ellipse(10 + sx * 3.6, hy - 1.6, 0.9, 0.5))
+        dog_eye(c, 10 + sx * 2.2, hy + 0.3, "happy" if bob > 0.45 else "open", 0.8, 0.9)
+    c.paint(DARK, ellipse(10, hy - 1.2, 0.85, 0.5))
+    if stress:
+        c.paint(TONGUE, capsule((10, hy - 2.1), (10, hy - 3.0), 0.6))
+    else:
+        w_mouth(c, 10, hy - 1.8, 0.65)
+    for sx in (-1, 1):
+        a, b = (10 + sx * 2.4, 5.6 + bob * 0.5), (10 + sx * 1.0, 7.0 + bob)
+        c.paint(BODY, union(capsule(a, b, 0.9), fluff(b[0], b[1], 0.8, 0.7, 6, 0.6)))
+
+
+def husky_frame(c, t, stress):
+    """허스키: 고개를 들고 아우~ 하울링, 사이사이 파란 눈으로 쳐다봄."""
+    w = 2 * math.pi * t
+    wag = math.sin(4 * w)
+    howl = math.sin(w) > 0.1
+    c.paint(BODY, union(capsule((14, 3), (16.6 + 0.6 * wag, 6.2), 1.4), ellipse(16.8 + 0.6 * wag, 6.6, 1.6, 1.4)))
+    c.paint(LIGHT, ellipse(17.2 + 0.6 * wag, 7.4, 1.0, 0.8))
+    sitting_body(c, "husky")
+    hx, hy = 10.0, 10.6 + (0.8 if howl else 0)
+    head = ellipse(hx, hy, 6.1, 4.8)
+    c.paint(BODY, union(head, pointy_ears(hx, hy, 1.8, 6.6, 5.6)))
+    c.paint(LIGHT, pointy_ears(hx, hy, 1.8, 6.6, 5.6, inner=True))
+    c.paint(LIGHT, intersect(head, union(ellipse(hx, hy - 2.3, 5.2, 2.8), capsule((hx, hy + 3.4), (hx, hy - 1), 0.7))))
+    for sx in (-1, 1):
+        c.paint(LIGHT, ellipse(hx + sx * 2.7, hy + 2, 0.9, 0.6))
+        c.paint(BLUSH, ellipse(hx + sx * 5, hy - 2, 1, 0.5))
+    if howl:
+        for sx in (-1, 1):
+            dog_eye(c, hx + sx * 3, hy - 0.3, "closed")
+        c.paint(DARK, ellipse(hx, hy - 1.4, 0.9, 0.5))
+        c.paint(DARK, ellipse(hx, hy - 3.0, 1.0, 1.2))
+        c.paint(TONGUE, ellipse(hx, hy - 3.6, 0.65, 0.45))
+        k = (math.sin(w) - 0.1) / 0.9
+        for i, y in enumerate((14.6, 16.4)):  # 아우~ 소리 물결
+            if k > 0.25 + 0.3 * i:
+                c.paint(WHISKER, curve([(15.6, y), (16.4, y + 0.7), (17.2, y), (18.0, y + 0.7), (18.8, y)], 0.28, 0.28), new_part=False)
+    else:
+        for sx in (-1, 1):
+            dog_eye(c, hx + sx * 3, hy - 0.5, "open", 0.95, 1.05, SWEAT)
+        c.paint(DARK, ellipse(hx, hy - 2.0, 1.0, 0.5))
+        if stress:
+            c.paint(TONGUE, capsule((hx, hy - 3), (hx, hy - 4), 0.75))
+
+
+# 사이사이 가끔 하는 행동 (모든 견종, 앉은 자세)
+
+def shake_frame(breed, c, t, stress):
+    """몸 털기: 앞 절반은 좌우로 부르르 (눈 질끈), 뒤 절반은 개운하게 방긋."""
+    w = 2 * math.pi * t
+    if t < 0.5:
+        a = 0.28 * math.sin(8 * w) * math.sin(2 * w)
+        with c.rotated(10, 1.0, a):
+            breed_tail(c, breed, math.sin(8 * w))
+            sitting_body(c, breed)
+            with c.rotated(10, 6.5, 0.8 * a):
+                breed_head(c, breed, 10, 10.5, eyes="closed")
+        for sx in (-1, 1):  # 휙휙 효과선
+            c.paint(WHISKER, curve([(10 + sx * 8.2, 6), (10 + sx * 9.2, 9), (10 + sx * 8.2, 12)], 0.26, 0.26), new_part=False)
+    else:
+        breed_tail(c, breed, math.sin(4 * w))
+        sitting_body(c, breed)
+        breed_head(c, breed, 10, 10.5, eyes="happy", mouth="open")
+
+
+def yawn_frame(breed, c, t, stress):
+    """하품: 고개를 살짝 들고 입을 쩍 벌리며 눈을 감았다가 끔뻑."""
+    w = 2 * math.pi * t
+    k = max(0.0, math.sin(w))
+    breed_tail(c, breed, 0.3 * math.sin(4 * w))
+    sitting_body(c, breed)
+    nose = breed_head(c, breed, 10, 10.5 + 0.6 * k, eyes="closed" if k > 0.3 else "open")
+    if k > 0.05:
+        c.paint(DARK, ellipse(10, nose - 1.0 - 1.1 * k, 1.1 + 0.5 * k, 0.5 + 1.3 * k))
+        c.paint(TONGUE, ellipse(10, nose - 1.2 - 2.0 * k, 0.8 + 0.3 * k, 0.4 + 0.5 * k))
+
+
+def paw_frame(breed, c, t, stress):
+    """손!: 앞발 하나를 앞으로 쑥 내밀어 분홍 젤리를 보여주고 고개를 갸웃."""
+    w = 2 * math.pi * t
+    k = max(0.0, math.sin(w)) ** 0.6  # 내민 정도
+    breed_tail(c, breed, math.sin(4 * w), x=4.0)  # 내미는 발과 겹치지 않게 꼬리는 반대쪽
+    sitting_body(c, breed, paws=False)
+    with c.rotated(10, 6.5, 0.18 * k):
+        breed_head(c, breed, 10, 10.5, mouth="open" if k > 0.5 else "closed")
+    px, py, pr = 12.2 + 0.9 * k, 1.4 + 4.6 * k, 1.1 + 1.25 * k
+    c.paint(BODY, capsule((11.8, 5), (px, py), 1.0))
+    c.paint(BODY, ellipse(px, py, pr * 1.1, pr))
+    c.paint(LIGHT, ellipse(px, py, pr * 0.85, pr * 0.78))
+    if k > 0.3:
+        c.paint(BLUSH, ellipse(px, py - pr * 0.25, pr * 0.42, pr * 0.32))  # 큰 젤리
+        for dx in (-0.55, 0.0, 0.55):  # 발가락 젤리
+            c.paint(BLUSH, ellipse(px + dx * pr, py + pr * 0.42 - (0.12 * pr if dx == 0 else 0), pr * 0.17, pr * 0.17))
 
 
 BREEDS = [("shiba", "시바견"), ("corgi", "웰시코기"), ("pomeranian", "포메라니안"),
           ("maltese", "말티즈"), ("poodle", "토이푸들"), ("husky", "허스키")]
+BREED_FRAMES = {"shiba": shiba_frame, "corgi": corgi_frame, "pomeranian": pomeranian_frame,
+                "maltese": maltese_frame, "poodle": poodle_frame, "husky": husky_frame}
+EXTRAS = [("shake", shake_frame), ("yawn", yawn_frame), ("paw", paw_frame)]
 
 
 def monkey_frame(c, t, stress):
@@ -714,7 +986,7 @@ PETS = {
     "dog": ("강아지", (0, 0, 32, UNIT_H), dog_frame),
     "cat": ("고양이", (0, 0, 32, UNIT_H), cat_frame),
     "horse": ("택시 미터기 말", (0, 0, 32, UNIT_H), horse_frame),
-    **{bid: (title, (0, 0, 20, UNIT_H), lambda c, t, stress, bid=bid: breed_frame(bid, c, t, stress)) for bid, title in BREEDS},
+    **{bid: (title, (0, 0, 20, UNIT_H), BREED_FRAMES[bid]) for bid, title in BREEDS},
     "monkey": ("원숭이 (머리 긁기)", (0, 0, 20, UNIT_H), monkey_frame),
     "dancer": ("엉덩이 춤", (0, 0, 20, UNIT_H), dancer_frame),
     "scooter": ("상동호수공원 (스쿠터)", (0, 0, 32, UNIT_H), scooter_frame),
@@ -724,28 +996,36 @@ PETS = {
 _fit_boxes = {}
 
 
-def fit_box(pet):
+def extra_draw(breed, kind):
+    return lambda c, t, stress: dict(EXTRAS)[kind](breed, c, t, stress)
+
+
+def fit_box(pet, extras=False):
     """모든 프레임(평소 + 바쁠 때)에서 실제로 칠해지는 범위를 재서, 아이콘을 꽉 채울 상자를 구함.
-    프레임마다 따로 맞추면 캐릭터가 출렁이니 전체 범위 하나로 맞춤."""
-    if pet not in _fit_boxes:
+    프레임마다 따로 맞추면 캐릭터가 출렁이니 전체 범위 하나로 맞춤.
+    extras면 그 견종이 가끔 하는 행동 전체를 한 상자로 (행동마다 크기가 달라지지 않게)."""
+    if (pet, extras) not in _fit_boxes:
         _, design, draw = PETS[pet]
+        draws = [extra_draw(pet, kind) for kind, _ in EXTRAS] if extras else [draw]
         n, xs, ys = 64, [], []
-        for stress in (False, True):
-            for i in range(FRAME_COUNT):
-                c = Canvas(n, design)
-                draw(c, i / FRAME_COUNT, stress)
-                for idx, ink in enumerate(c.ink):
-                    if ink != NONE:
-                        xs.append(idx % n)
-                        ys.append(idx // n)
+        for draw in draws:
+            for stress in (False, True):
+                for i in range(FRAME_COUNT):
+                    c = Canvas(n, design)
+                    draw(c, i / FRAME_COUNT, stress)
+                    for idx, ink in enumerate(c.ink):
+                        if ink != NONE:
+                            xs.append(idx % n)
+                            ys.append(idx // n)
         c, m = Canvas(n, design), 0.2
-        _fit_boxes[pet] = (min(xs) / c.scale - c.ox - m, min(ys) / c.scale - c.oy - m,
-                           (max(xs) + 1) / c.scale - c.ox + m, (max(ys) + 1) / c.scale - c.oy + m)
-    return _fit_boxes[pet]
+        _fit_boxes[pet, extras] = (min(xs) / c.scale - c.ox - m, min(ys) / c.scale - c.oy - m,
+                                   (max(xs) + 1) / c.scale - c.ox + m, (max(ys) + 1) / c.scale - c.oy + m)
+    return _fit_boxes[pet, extras]
 
 
-def render_frames(pet, size, stress, count=FRAME_COUNT):
-    box, draw = fit_box(pet), PETS[pet][2]
+def render_frames(pet, size, stress, count=FRAME_COUNT, extra=None):
+    """extra를 주면 견종 강아지가 가끔 하는 행동(shake, yawn, paw)의 프레임."""
+    box, draw = (fit_box(pet, True), extra_draw(pet, extra)) if extra else (fit_box(pet), PETS[pet][2])
     frames = []
     for i in range(count):
         c = Canvas(size, box)
@@ -775,8 +1055,6 @@ def to_image(c, palette=None, mono=(0, 0, 0)):
 # 픽셀 하나를 SS x SS로 쪼개 칠해서 가장자리가 부드러움. 테두리 선 대신 가장자리만 살짝 어둡게.
 
 SOLID_PETS = [bid for bid, _ in BREEDS]
-BREED_COLORS = {"shiba": "cheese", "corgi": "cheese", "pomeranian": "cheese",
-                "maltese": "cream", "poodle": "choco", "husky": "gray"}  # 자동 색상일 때 견종 고유색
 
 
 def _unit(x, y, z):
@@ -868,10 +1146,10 @@ def to_solid_image(c, palette, ss=4):
 
 
 def frame_image(c, pet, color, solid, mono=(0, 0, 0)):
-    """설정에 맞는 한 프레임. 입체는 견종 강아지만, 자동 색상이면 견종 고유색으로."""
-    if solid and pet in SOLID_PETS:
-        return to_solid_image(c, PALETTES.get(color) or PALETTES[BREED_COLORS[pet]])
-    return to_image(c, PALETTES.get(color), mono)
+    """설정에 맞는 한 프레임. 입체는 견종 강아지만, 자동 색상이면 견종 털색으로."""
+    solid = solid and pet in SOLID_PETS
+    palette = palette_for(pet, color, solid)
+    return to_solid_image(c, palette) if solid else to_image(c, palette, mono)
 
 
 def write_preview(path, sizes=(16, 20, 24, 32)):
@@ -1195,6 +1473,7 @@ class PetTray:
         self.usage = self.speed = 0.0
         self.lock = threading.Lock()
         self.handles = [[], []]  # [평소, 바쁠 때]
+        self.extra_handles = []  # 견종 강아지가 가끔 하는 행동마다 한 바퀴
         self.light = taskbar_is_light()
         self.pystray, self.win32 = pystray, win32
         self.icon = TrayIcon("RunDog-" + source, self.first_image(), "%s 사용량" % self.label, self.build_menu())
@@ -1203,11 +1482,11 @@ class PetTray:
     def settings(self):
         return self.app.settings[self.source]
 
-    def frames_for(self, stress, count=FRAME_COUNT):
+    def frames_for(self, stress, count=FRAME_COUNT, extra=None):
         pet, color = self.settings["pet"], self.settings["color"]
         mono = (0, 0, 0) if self.light else (255, 255, 255)
         return [frame_image(c, pet, color, self.settings.get("solid", False), mono)
-                for c in render_frames(pet, self.app.icon_size, stress, count)]
+                for c in render_frames(pet, self.app.icon_size, stress, count, extra)]
 
     def first_image(self):
         return self.frames_for(False, 1)[0]
@@ -1216,10 +1495,19 @@ class PetTray:
         new = [[make_hicon(img) for img in self.frames_for(stress)] for stress in (False, True)]
         with self.lock:
             old, self.handles = self.handles, new
-        for h in old[0] + old[1]:
+            old += self.extra_handles
+            self.extra_handles = []
+        for h in [h for frames in old for h in frames]:
             self.win32.DestroyIcon(h)
         # 탐색기가 다시 시작될 때 쓰는 기본 그림도 맞춰 둠
         self.icon.icon = self.first_image()
+        # 가끔 하는 행동은 기본 동작이 먼저 움직이기 시작한 뒤에 그림 (입체는 몇 초 걸림)
+        if self.settings["pet"] in dict(BREEDS):
+            extras = [[make_hicon(img) for img in self.frames_for(False, extra=kind)] for kind, _ in EXTRAS]
+            with self.lock:
+                old, self.extra_handles = self.extra_handles, extras
+            for h in [h for frames in old for h in frames]:
+                self.win32.DestroyIcon(h)
 
     def build_menu(self):
         Item, Menu = self.pystray.MenuItem, self.pystray.Menu
@@ -1227,6 +1515,9 @@ class PetTray:
         def choose(key, value):
             def action(icon, item):
                 self.settings[key] = value
+                # 견종 강아지를 고를 때 자동(흑백) 색상이면 실제 털색으로 바꿔 줌
+                if key == "pet" and value in dict(BREEDS) and self.settings["color"] == "auto":
+                    self.settings["color"] = "coat"
                 save_settings(self.app.settings)
                 self.rebuild()
                 icon.update_menu()
@@ -1248,7 +1539,7 @@ class PetTray:
             self.rebuild()
             icon.update_menu()
 
-        # 입체는 견종 강아지만 (자동 색상이면 견종 고유색으로 칠함)
+        # 입체는 견종 강아지만 (자동 색상이면 견종 털색으로 칠함)
         colors = Menu(*[Item(title, choose("color", cid), checked=checked("color", cid), radio=True)
                         for cid, title in COLOR_CHOICES],
                       Menu.SEPARATOR,
@@ -1288,7 +1579,24 @@ class PetTray:
         초당 20장을 넘으면 매번 같은 칸 수(정수)만큼 건너뜀. 칸 수가 들쭉날쭉하거나
         한 번에 너무 많이 건너뛰면 다리가 순간이동하는 것처럼 보여서 최고 속도도 여기에 맞춤."""
         index = 0
+        extra, next_extra = None, time.time() + random.uniform(15, 40)
         while self.app.running:
+            # 견종 강아지는 15~40초마다 한 번 몸 털기·하품·손! 중 하나를 천천히 한 바퀴 (바쁠 땐 안 함)
+            if extra is None and time.time() >= next_extra:
+                next_extra = time.time() + random.uniform(15, 40)
+                with self.lock:
+                    if self.extra_handles and self.speed <= 40:
+                        extra, index = random.randrange(len(self.extra_handles)), 0
+            if extra is not None:
+                with self.lock:
+                    frames = self.extra_handles[extra] if extra < len(self.extra_handles) else []
+                    if index < len(frames):
+                        self.icon.show_handle(frames[index])
+                if index < len(frames):
+                    index += 1
+                    time.sleep(1.6 / FRAME_COUNT)
+                    continue
+                extra, index = None, 0
             cycle = 1.6 / (1 + self.speed / 20)
             step = max(1, math.ceil(FRAME_COUNT / 20 / cycle - 1e-9))
             interval = cycle / FRAME_COUNT * step
@@ -1374,7 +1682,9 @@ def selftest():
     print("icon size", tray_icon_size(), "hicon ok")
     for pet in SOLID_PETS:
         assert frame_image(render_frames(pet, 24, True, 1)[0], pet, "auto", True).getbbox(), "입체 그리기 실패"
-    print("solid ok")
+        for kind, _ in EXTRAS:
+            assert len(render_frames(pet, 16, False, extra=kind)) == FRAME_COUNT
+    print("solid, extras ok")
     cpu, gpu = make_cpu_reader(), GPUReader()
     time.sleep(1)
     print("cpu %.1f%%  gpu %.1f%% (counter ok: %s)" % (cpu(), gpu(), gpu.ok))

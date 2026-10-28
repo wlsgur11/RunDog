@@ -48,6 +48,8 @@ struct Canvas {
     var part: [Int]
     var partCount = 0
     var ops: [PaintOp] = []
+    // rotated(...) 안에서 그리는 도형은 돌려서 찍음 (고개 갸웃, 엉덩이 실룩, 몸 털기)
+    var rotations: [(P, Double)] = []
 
     init(w: Int) {
         self.w = w
@@ -56,7 +58,14 @@ struct Canvas {
     }
 
     // 픽셀 중심 좌표로 도형 안쪽을 칠함 (y는 위쪽이 +). 무늬는 아래 부위 번호를 유지
+    mutating func rotated(_ center: P, _ angle: Double, _ draw: (inout Canvas) -> Void) {
+        rotations.append((center, angle))
+        draw(&self)
+        rotations.removeLast()
+    }
+
     mutating func paint(_ value: Ink, newPart: Bool? = nil, onlyEmpty: Bool = false, _ shape: Shape) {
+        let shape = rotations.reversed().reduce(shape) { rotate($0, $1.0, $1.1) }
         let isPart = newPart ?? (value == .body || value == .far)
         if isPart { partCount += 1 }
         var box = (x0: Double.infinity, y0: Double.infinity, x1: -Double.infinity, y1: -Double.infinity)
@@ -77,6 +86,9 @@ struct Canvas {
     }
 
     mutating func dot(_ value: Ink, _ p: P) {
+        let p = rotations.reversed().reduce(p) { p, r in
+            P(r.0.x + (p.x - r.0.x) * cos(r.1) - (p.y - r.0.y) * sin(r.1), r.0.y + (p.x - r.0.x) * sin(r.1) + (p.y - r.0.y) * cos(r.1))
+        }
         let r = value == .hole ? 0.38 : 0.45
         ops.append(PaintOp(ink: value, shape: ellipse(p.x, p.y, r, r), solid: value != .hole, onlyEmpty: false,
                            box: (p.x - r, p.y - r, p.x + r, p.y + r)))
@@ -175,9 +187,11 @@ struct Palette {
     let fill, outline, light, ear, dark: RGB
 }
 
-// 첫 번째(nil)는 색 없이 메뉴 바 글자색을 따라가는 템플릿 모드
+// 첫 번째(nil)는 색 없이 메뉴 바 글자색을 따라가는 템플릿 모드.
+// 두 번째 "견종 털색"은 견종 강아지마다 실제 털색으로 칠함 (견종이 아니면 치즈색)
 let palettes: [Palette?] = [
     nil,
+    Palette(id: "coat", title: "견종 털색", fill: RGB(0xEBA35C), outline: RGB(0x5B3417), light: RGB(0xFFF3E0), ear: RGB(0xC47836), dark: RGB(0x2B1B12)),
     Palette(id: "cheese", title: "치즈", fill: RGB(0xEBA35C), outline: RGB(0x5B3417), light: RGB(0xFFF3E0), ear: RGB(0xC47836), dark: RGB(0x2B1B12)),
     Palette(id: "cream", title: "크림", fill: RGB(0xF3E6D3), outline: RGB(0x6E5A47), light: RGB(0xFFFFFF), ear: RGB(0xD9B78F), dark: RGB(0x2B2420)),
     Palette(id: "choco", title: "초코", fill: RGB(0x8B5A3C), outline: RGB(0x3A2215), light: RGB(0xF0D2B0), ear: RGB(0x5C3824), dark: RGB(0x1E120B)),
@@ -261,6 +275,18 @@ func fluff(_ cx: Double, _ cy: Double, _ rx: Double, _ ry: Double, bumps: Int, r
     let outer = ellipse(cx, cy, rx + r, ry + r).height!, bumpy = shape.height!
     shape.height = { x, y in max(outer(x, y), 0.5 * bumpy(x, y)) }
     return shape
+}
+
+// center를 중심으로 angle만큼 돌린 도형
+func rotate(_ shape: Shape, _ center: P, _ angle: Double) -> Shape {
+    let c = cos(angle), s = sin(angle)
+    func back(_ x: Double, _ y: Double) -> (Double, Double) {
+        let dx = x - center.x, dy = y - center.y
+        return (center.x + dx * c + dy * s, center.y - dx * s + dy * c)
+    }
+    var rotated = Shape(test: { x, y in let p = back(x, y); return shape(p.0, p.1) })
+    if let h = shape.height { rotated.height = { x, y in let p = back(x, y); return h(p.0, p.1) } }
+    return rotated
 }
 
 // 베지어 곡선을 따라가는 굵기가 줄어드는 선 (꼬리, 귀)
@@ -610,112 +636,358 @@ func horseFrame(_ t: Double, stress: Bool) -> Canvas {
 
 // 앉아서 꼬리를 흔들며 앞발을 번갈아 콩콩 드는 강아지 (정면). 견종마다 귀·무늬·꼬리·털이 다름.
 // 바쁠수록 더 신나게 흔들고, 40%를 넘으면 혀를 내밀고 헥헥
-func breedFrame(_ breed: Pet, _ t: Double, stress: Bool) -> Canvas {
-    let w = 2 * Double.pi * t
-    // 눈·코가 좌우 대칭으로 또렷하게 찍히도록 머리는 가운데 고정, 위아래도 1픽셀씩만 움직임
-    let bb = 0.0
-    let hx = 10.0, hy = 10.5 + (sin(2 * w) > 0.2 ? 1 : 0)
-    let wag = sin(4 * w)
-    let flop = 0.5 * sin(2 * w - 1.6)   // 늘어진 귀는 머리보다 한 박자 늦게 출렁
-    let lift = [sin(w) > 0.3 ? 1.0 : 0, sin(w) < -0.3 ? 1.0 : 0]
-    let marked = [Pet.shiba, .corgi, .husky].contains(breed)   // 흰 주둥이·가슴·양말 무늬
+// MARK: - 견종 강아지
+// 견종마다 실제 강아지가 자주 하는 대표 행동 하나를 반복하고, 사이사이 가끔 몸 털기·하품·손!을 함 (Extra).
+// 귀여운 부분은 크게 보이게 견종마다 구도가 다름
 
-    var c = Canvas(w: 20)
-    // 꼬리 (몸 뒤)
-    switch breed {
-    case .shiba, .husky:
-        // 등 위로 돌돌 말린 꼬리
-        c.paint(.body, ellipse(16.2 + 0.8 * wag, 5.8 + bb, 2.2, 2))
-        c.paint(.light, ellipse(16.4 + 0.8 * wag, 5.6 + bb, 0.9, 0.8))
-    case .pomeranian, .maltese:
-        // 복슬복슬한 깃털 꼬리
-        c.paint(.body, fluff(16 + 0.9 * wag, 6 + bb, 1.6, 1.3, bumps: 7, r: 1))
-    case .poodle:
-        // 끝에 방울이 달린 꼬리
-        c.paint(.body, union([capsule(P(13.5, 4 + bb), P(16 + 0.8 * wag, 6.4 + bb), 0.6), fluff(16.2 + 0.9 * wag, 6.8 + bb, 0.9, 0.9, bumps: 6, r: 0.8)]))
-    default:
-        break   // 코기는 꼬리 대신 엉덩이를 씰룩
+enum EyeKind { case open, happy, closed }   // 동그란 눈 + 반짝이, ^^, 감은 눈
+enum Mouth { case closed, open, tongue }
+
+// 머리 양쪽의 뾰족 귀. inner면 그 안쪽의 밝은 귓속
+func pointyEars(_ hx: Double, _ hy: Double, _ base: Double, _ tip: Double, _ spread: Double, inner: Bool = false) -> Shape {
+    if inner {
+        return union([triangle(P(hx - spread + 0.9, hy + base + 1.3), P(hx - spread + 1.3, hy + tip - 1.3), P(hx - 2.8, hy + base + 2.2)),
+                      triangle(P(hx + spread - 0.9, hy + base + 1.3), P(hx + spread - 1.3, hy + tip - 1.3), P(hx + 2.8, hy + base + 2.2))])
     }
-    // 뒷발 + 앉은 몸통 + 가슴
+    return union([triangle(P(hx - spread, hy + base), P(hx - spread + 0.9, hy + tip), P(hx - 1.7, hy + base + 2.1)),
+                  triangle(P(hx + spread, hy + base), P(hx + spread - 0.9, hy + tip), P(hx + 1.7, hy + base + 2.1))])
+}
+
+func dogEye(_ c: inout Canvas, _ ex: Double, _ ey: Double, _ kind: EyeKind = .open, rx: Double = 0.9, ry: Double = 1, ink: Ink = .dark) {
+    switch kind {
+    case .happy:
+        c.paint(.dark, newPart: false, curve([P(ex - rx - 0.1, ey - 0.5), P(ex, ey + 1.1), P(ex + rx + 0.1, ey - 0.5)], from: 0.38, to: 0.38))
+    case .closed:
+        c.paint(.dark, newPart: false, curve([P(ex - rx - 0.1, ey + 0.2), P(ex, ey - 0.8), P(ex + rx + 0.1, ey + 0.2)], from: 0.34, to: 0.34))
+    case .open:
+        c.paint(ink, newPart: false, ellipse(ex, ey, rx, ry))
+        if ink == .sweat { c.dot(.dark, P(ex + 0.4, ey - 0.4)) }   // 허스키 파란 눈의 동공
+        c.dot(.hole, P(ex - rx * 0.45, ey + ry * 0.45))
+    }
+}
+
+// ω 입
+func wMouth(_ c: inout Canvas, _ x: Double, _ y: Double, _ s: Double = 1) {
+    for sx in [-1.0, 1] {
+        c.paint(.dark, newPart: false, curve([P(x, y + 0.1), P(x + sx * 0.7 * s, y - 0.6 * s), P(x + sx * 1.4 * s, y)], from: 0.24, to: 0.24))
+    }
+}
+
+func breedTail(_ c: inout Canvas, _ breed: Pet, _ wag: Double, x: Double = 16.2, y: Double = 5.8) {
+    switch breed {
+    case .shiba, .husky:   // 등 위로 돌돌 말린 꼬리
+        c.paint(.body, ellipse(x + 0.8 * wag, y, 2.2, 2))
+        c.paint(.light, ellipse(x + 0.2 + 0.8 * wag, y - 0.2, 0.9, 0.8))
+    case .pomeranian, .maltese:   // 복슬복슬한 깃털 꼬리
+        c.paint(.body, fluff(x - 0.2 + 0.9 * wag, y + 0.2, 1.6, 1.3, bumps: 7, r: 1))
+    case .poodle:   // 끝에 방울이 달린 꼬리
+        c.paint(.body, union([capsule(P(x - 2.7, y - 1.8), P(x - 0.2 + 0.8 * wag, y + 0.6), 0.6),
+                              fluff(x + 0.9 * wag, y + 1, 0.9, 0.9, bumps: 6, r: 0.8)]))
+    default: break   // 코기는 꼬리가 없음
+    }
+}
+
+// 앉은 몸통 + 뒷발 (+ 앞발 두 개). 시바·코기·허스키는 흰 가슴·양말
+func sittingBody(_ c: inout Canvas, _ breed: Pet, paws: Bool = true) {
+    let marked = [Pet.shiba, .corgi, .husky].contains(breed)
     for fx in [5.9, 14.1] {
         c.paint(.body, ellipse(fx, 1.4, 1.9, 1.3))
         if marked { c.paint(.light, ellipse(fx, 1.3, 1.2, 0.7)) }
     }
-    c.paint(.body, ellipse(10, 4.4 + bb, 4.6, 3.9, tilt: breed == .corgi ? 0.12 * wag : 0))
-    if marked { c.paint(.light, ellipse(10, 4.4 + bb, 2.4, 2.8)) }
-    // 번갈아 콩콩 드는 앞발
-    for (lx, up) in zip([8.2, 11.8], lift) {
-        let paw = P(lx, 1.2 + up)
-        c.paint(.body, newPart: false, union([capsule(P(lx, 5 + bb), paw, 1.05), ellipse(lx, paw.y, 1.3, 0.95)]))
-        if marked { c.paint(.light, ellipse(lx, paw.y, 0.9, 0.6)) }
+    c.paint(.body, ellipse(10, 4.4, 4.6, 3.9))
+    if marked { c.paint(.light, ellipse(10, 4.4, 2.4, 2.8)) }
+    for lx in paws ? [8.2, 11.8] : [8.2] {
+        c.paint(.body, newPart: false, union([capsule(P(lx, 5), P(lx, 1.2), 1.05), ellipse(lx, 1.2, 1.3, 0.95)]))
+        if marked { c.paint(.light, ellipse(lx, 1.2, 0.9, 0.6)) }
     }
+}
 
-    // 머리. 뾰족 귀는 머리와 한 덩어리로 그려서 사이에 선이 안 생기게 함
-    func pointyEars(_ base: Double, _ tip: Double, _ spread: Double) -> Shape {
-        union([triangle(P(hx - spread, hy + base), P(hx - spread + 0.9, hy + tip), P(hx - 1.7, hy + base + 2.1)),
-               triangle(P(hx + spread, hy + base), P(hx + spread - 0.9, hy + tip), P(hx + 1.7, hy + base + 2.1))])
-    }
-    func innerEars(_ base: Double, _ tip: Double, _ spread: Double) -> Shape {
-        union([triangle(P(hx - spread + 0.9, hy + base + 1.3), P(hx - spread + 1.3, hy + tip - 1.3), P(hx - 2.8, hy + base + 2.2)),
-               triangle(P(hx + spread - 0.9, hy + base + 1.3), P(hx + spread - 1.3, hy + tip - 1.3), P(hx + 2.8, hy + base + 2.2))])
-    }
-    var eyeX = 3.0, eyeY = hy - 0.5
+// 앉은 자세용 정면 머리. 코의 y를 돌려줌 (입을 따로 그릴 때)
+@discardableResult
+func breedHead(_ c: inout Canvas, _ breed: Pet, _ hx: Double, _ hy: Double, eyes: EyeKind = .open, mouth: Mouth = .closed) -> Double {
+    let eyeY = hy - 0.5
     let head = ellipse(hx, hy, 6.1, 4.8)
     switch breed {
     case .shiba, .husky:
-        c.paint(.body, union([head, pointyEars(1.8, 6.6, 5.6)]))
-        c.paint(.light, innerEars(1.8, 6.6, 5.6))
+        c.paint(.body, union([head, pointyEars(hx, hy, 1.8, 6.6, 5.6)]))
+        c.paint(.light, pointyEars(hx, hy, 1.8, 6.6, 5.6, inner: true))
         if breed == .shiba {
-            // 볼과 턱이 하얀 우라지로 + 하얀 눈썹 점
             c.paint(.light, intersect(head, ellipse(hx, hy - 2.6, 4.6, 2.6)))
-            for x in [7.5, 12.5] { c.dot(.light, P(x, eyeY + 2.5)) }
+            for sx in [-1.0, 1] { c.paint(.light, ellipse(hx + sx * 2.5, eyeY + 2.5, 0.5, 0.5)) }
         } else {
-            // 허스키 가면: 하얀 아랫얼굴 + 이마 가운데 흰 줄 + 눈 위 흰 점
             c.paint(.light, intersect(head, union([ellipse(hx, hy - 2.3, 5.2, 2.8), capsule(P(hx, hy + 3.4), P(hx, hy - 1), 0.7)])))
-            for s in [-1.0, 1.0] { c.paint(.light, ellipse(hx + s * 2.7, hy + 2, 0.9, 0.6)) }
+            for sx in [-1.0, 1] { c.paint(.light, ellipse(hx + sx * 2.7, hy + 2, 0.9, 0.6)) }
         }
     case .corgi:
-        // 아주 큰 귀 + 이마의 흰 줄 + 흰 주둥이
-        c.paint(.body, union([head, pointyEars(1.2, 7.4, 6.1)]))
-        c.paint(.light, innerEars(1.2, 7.4, 6.1))
+        c.paint(.body, union([head, pointyEars(hx, hy, 1.2, 7.4, 6.1)]))
+        c.paint(.light, pointyEars(hx, hy, 1.2, 7.4, 6.1, inner: true))
         c.paint(.light, intersect(head, union([ellipse(hx, hy - 2.5, 3.6, 2.4), capsule(P(hx, hy + 4.6), P(hx, hy - 1), 0.8)])))
     case .pomeranian:
-        // 동그란 털 뭉치 + 털 위로 살짝 나온 작은 귀
-        c.paint(.body, union([fluff(hx, hy - 0.4, 6, 4.8, bumps: 16, r: 1.2), pointyEars(3.4, 6.4, 3.9)]))
+        c.paint(.body, union([fluff(hx, hy - 0.4, 6, 4.8, bumps: 16, r: 1.2), pointyEars(hx, hy, 3.4, 6.4, 3.9)]))
         c.paint(.light, ellipse(hx, hy - 2.4, 2.6, 1.6))
     case .maltese:
-        // 길게 늘어진 귀(머리 뒤) + 동그란 하얀 머리 + 정수리 리본
-        for s in [-1.0, 1.0] {
-            c.paint(.body, union([capsule(P(hx + s * 4.8, hy + 1.6), P(hx + s * 5.9, hy - 3 + flop), 2), ellipse(hx + s * 5.9, hy - 3.5 + flop, 2, 1.4)]))
+        for sx in [-1.0, 1] {
+            c.paint(.body, union([capsule(P(hx + sx * 4.8, hy + 1.6), P(hx + sx * 5.9, hy - 3), 2), ellipse(hx + sx * 5.9, hy - 3.5, 2, 1.4)]))
         }
         c.paint(.body, union([ellipse(hx, hy, 5.3, 4.6), ellipse(hx, hy + 4.2, 1.6, 1.2)]))
         c.paint(.tongue, union([triangle(P(hx - 2.2, hy + 4.4), P(hx - 2.2, hy + 6.4), P(hx, hy + 5.4)),
                                 triangle(P(hx + 2.2, hy + 4.4), P(hx + 2.2, hy + 6.4), P(hx, hy + 5.4))]))
     case .poodle:
-        // 동그란 머리 방울 + 곱슬곱슬 늘어진 귀
         c.paint(.body, fluff(hx, hy + 4.2, 3, 1.8, bumps: 9, r: 1))
         c.paint(.body, ellipse(hx, hy - 0.2, 5, 4.5))
-        for s in [-1.0, 1.0] {
-            c.paint(.ear, newPart: true, fluff(hx + s * 5.2, hy - 1.6 + flop, 1.3, 2.4, bumps: 8, r: 1))
-        }
-    default:
-        break
+        for sx in [-1.0, 1] { c.paint(.ear, newPart: true, fluff(hx + sx * 5.2, hy - 1.6, 1.3, 2.4, bumps: 8, r: 1)) }
+    default: break
     }
-    // 얼굴: 볼터치, 반짝이는 눈, 코, 바쁠 때 혀
-    // 2x2 눈(왼쪽 위에 하이라이트), 2x1 코. 허스키는 파란 눈
-    for s in [-1.0, 1.0] {
-        let ex = hx + s * eyeX
-        c.paint(.blush, ellipse(hx + s * 5, eyeY - 1.5, 1, 0.5))
-        c.paint(breed == .husky ? .sweat : .dark, newPart: false, ellipse(ex, eyeY, 0.9, 1))
-        if breed == .husky { c.dot(.dark, P(ex + 0.5, eyeY - 0.5)) }
-        c.dot(.hole, P(ex - 0.5, eyeY + 0.5))
+    for sx in [-1.0, 1] {
+        c.paint(.blush, ellipse(hx + sx * 5, eyeY - 1.5, 1, 0.5))
+        dogEye(&c, hx + sx * 3, eyeY, eyes, ink: breed == .husky ? .sweat : .dark)
     }
     let noseY = eyeY - 1.5
     c.paint(.dark, ellipse(hx, noseY, 1, 0.5))
-    if stress {
+    switch mouth {
+    case .open:   // 벌린 입 + 혀
+        c.paint(.dark, ellipse(hx, noseY - 1.3, 0.9, 0.75))
+        c.paint(.tongue, ellipse(hx, noseY - 1.65, 0.65, 0.4))
+    case .tongue:
         c.paint(.tongue, capsule(P(hx, noseY - 1), P(hx, noseY - 2), 0.75))
+    case .closed: break
+    }
+    return noseY
+}
+
+// 시바: 얼굴을 크게, 헥헥 웃다가(^^) 가끔 동그란 눈으로 쳐다봄. 말린 꼬리가 머리 뒤로 삐죽
+func shibaFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t, wag = sin(4 * w)
+    let smile = sin(w) > -0.35
+    let hx = 10.0, hy = 8.6 + (sin(2 * w) > 0 ? 0.4 : 0)
+    var c = Canvas(w: 20)
+    c.paint(.body, ellipse(16.4 + 0.7 * wag, 4.2, 2.5, 2.3))
+    c.paint(.light, ellipse(16.6 + 0.7 * wag, 4.0, 1.05, 0.95))
+    c.paint(.body, ellipse(10, 1.0, 6.6, 2.8))
+    c.paint(.light, ellipse(10, 1.0, 3.4, 2.2))
+    let head = ellipse(hx, hy, 7.6, 6.0)
+    c.paint(.body, union([head, pointyEars(hx, hy, 2.4, 8.4, 6.9)]))
+    c.paint(.light, pointyEars(hx, hy, 2.4, 8.4, 6.9, inner: true))
+    c.paint(.light, intersect(head, ellipse(hx, hy - 3.4, 6.0, 3.6)))   // 우라지로 (하얀 볼·턱)
+    for sx in [-1.0, 1] {
+        c.paint(.light, ellipse(hx + sx * 3.3, hy + 3.0, 0.75, 0.6))   // 눈썹 점
+        c.paint(.blush, ellipse(hx + sx * 5.5, hy - 1.4, 1.2, 0.6))
+        dogEye(&c, hx + sx * 3.5, hy + 0.6, smile ? .happy : .open, rx: 1.05, ry: 1.2)
+    }
+    c.paint(.dark, ellipse(hx, hy - 1.2, 1.2, 0.65))
+    if stress {
+        c.paint(.dark, ellipse(hx, hy - 2.8, 1.3, 1.0))
+        c.paint(.tongue, capsule(P(hx, hy - 3.2), P(hx, hy - 4.6), 0.9))
+    } else if smile {
+        c.paint(.dark, ellipse(hx, hy - 2.8, 1.3, 1.0))
+        c.paint(.tongue, ellipse(hx, hy - 3.2, 0.95, 0.55))
+    } else {
+        wMouth(&c, hx, hy - 1.9)
     }
     return c
+}
+
+// 코기: 뒤돌아 짧은 다리로 종종 걸으며 식빵 엉덩이를 실룩, 가끔 어깨 너머로 돌아봄
+func corgiFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t
+    var c = Canvas(w: 20)
+    for (k, fx) in [6.4, 13.6].enumerated() {
+        let up = 0.7 * max(0, sin(2 * w + Double(k) * .pi))
+        c.paint(.body, union([capsule(P(fx, 3), P(fx, 0.9 + up), 1.3), ellipse(fx, 0.9 + up, 1.7, 1.1)]))
+        c.paint(.light, ellipse(fx, 0.8 + up, 1.1, 0.6))
+    }
+    let hx = 10.8, hy = 12.6
+    let head = ellipse(hx, hy, 4.6, 3.6)
+    c.paint(.body, union([head, pointyEars(hx, hy, 0.8, 5.2, 4.7)]))
+    c.paint(.light, pointyEars(hx, hy, 0.8, 5.2, 4.7, inner: true))
+    if sin(w) > -0.2 {
+        c.paint(.light, intersect(head, ellipse(hx + 3.4, hy - 1.4, 2.6, 2)))
+        dogEye(&c, hx + 2.4, hy + 0.2, stress ? .happy : .open, rx: 0.8, ry: 0.9)
+        c.paint(.dark, ellipse(hx + 4.4, hy - 1.0, 0.65, 0.5))
+        c.paint(.blush, ellipse(hx + 2.8, hy - 1.4, 0.8, 0.45))
+    }
+    c.paint(.body, ellipse(10, 8.2, 5.2, 4.2))   // 등
+    c.rotated(P(10, 1.2), 0.13 * sin(2 * w)) { c in
+        for sx in [-1.0, 1] {
+            let cheek = ellipse(10 + sx * 2.35, 4.6, 3.5, 3.9)
+            c.paint(.body, cheek)
+            c.paint(.light, intersect(cheek, fluff(10, 1.6, 5.4, 2.6, bumps: 12, r: 0.9)))   // 하얀 털바지
+        }
+        c.paint(.body, newPart: true, ellipse(10, 8.0, 1.0, 0.8))   // 짧은 꽁지
+        if stress { c.paint(.sweat, newPart: true, ellipse(15.6, 10.4, 0.6, 0.9)) }
+    }
+    return c
+}
+
+// 포메: 동그란 솜뭉치가 반가워서 깡총깡총. 착지할 땐 납작, 뛰어오르면 ^^
+func pomeranianFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t, wag = sin(4 * w)
+    let s = abs(sin(2 * w))
+    let hop = 1.8 * s, squash = max(0, 1 - 3 * s)
+    let cx = 10.0, cy = 7.0 + hop
+    let rx = 6.2 * (1 + 0.1 * squash), ry = 5.6 * (1 - 0.1 * squash)
+    var c = Canvas(w: 20)
+    c.paint(.body, fluff(15.4 + 0.8 * wag, cy + 3.4, 1.9, 1.6, bumps: 7, r: 1.1))
+    for fx in [7.6, 12.4] { c.paint(.body, ellipse(fx, cy - ry - 0.2, 1.4, 0.9)) }
+    c.paint(.body, union([fluff(cx, cy, rx, ry, bumps: 18, r: 1.3), pointyEars(cx, cy, ry - 0.6, ry + 3.6, 3.8)]))
+    c.paint(.light, pointyEars(cx, cy, ry - 0.6, ry + 3.6, 3.8, inner: true))
+    c.paint(.light, ellipse(cx, cy - 1.7, 2.6, 1.8))
+    for sx in [-1.0, 1] {
+        c.paint(.blush, ellipse(cx + sx * 3.9, cy - 1.0, 0.9, 0.5))
+        dogEye(&c, cx + sx * 2.3, cy + 0.4, hop > 1.2 ? .happy : .open, rx: 0.85, ry: 0.95)
+    }
+    c.paint(.dark, ellipse(cx, cy - 1.0, 0.8, 0.45))
+    if stress {
+        c.paint(.tongue, capsule(P(cx, cy - 1.9), P(cx, cy - 2.8), 0.6))
+    } else {
+        wMouth(&c, cx, cy - 1.6, 0.7)
+    }
+    return c
+}
+
+// 말티즈: 큰 얼굴로 소리를 듣고 갸웃갸웃, 긴 귀가 팔랑. 가끔 메롱
+func malteseFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t
+    let flap = 0.7 * sin(2 * w - 1)
+    let hx = 10.0, hy = 9.4
+    var c = Canvas(w: 20)
+    c.paint(.body, ellipse(10, 1.2, 5.2, 2.6))
+    c.rotated(P(10, 3.0), 0.15 * max(-1, min(1, 1.8 * sin(w)))) { c in
+        for sx in [-1.0, 1] {
+            c.paint(.body, union([capsule(P(hx + sx * 4.6, hy + 1.8), P(hx + sx * 6.4, hy - 5.2 + flap * sx), 2.2),
+                                  fluff(hx + sx * 6.4, hy - 5.6 + flap * sx, 1.9, 1.3, bumps: 7, r: 0.8)]))
+        }
+        c.paint(.body, union([ellipse(hx, hy, 6.0, 5.4), fluff(hx, hy + 5.0, 2.2, 1.1, bumps: 8, r: 0.9)]))
+        c.paint(.tongue, union([triangle(P(hx - 2.6, hy + 5.4), P(hx - 2.6, hy + 7.8), P(hx, hy + 6.6)),
+                                triangle(P(hx + 2.6, hy + 5.4), P(hx + 2.6, hy + 7.8), P(hx, hy + 6.6))]))
+        c.paint(.tongue, ellipse(hx, hy + 6.6, 0.7, 0.7))
+        for sx in [-1.0, 1] {
+            c.paint(.blush, ellipse(hx + sx * 4.4, hy - 1.9, 1.1, 0.55))
+            dogEye(&c, hx + sx * 2.8, hy - 0.1, sin(w) < -0.8 ? .happy : .open, rx: 1.2, ry: 1.35)
+        }
+        c.paint(.dark, ellipse(hx, hy - 2.1, 1.0, 0.6))
+        if stress || sin(w) > 0.7 { c.paint(.tongue, capsule(P(hx, hy - 3.1), P(hx, hy - 3.9), 0.7)) }
+    }
+    return c
+}
+
+// 푸들: 곰돌이 컷 얼굴로 두 발로 서서 앞발을 모으고 까딱까딱 (앙)
+func poodleFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t, wag = sin(4 * w)
+    let bob = 0.6 * sin(2 * w), flop = 0.4 * sin(2 * w - 1.2)
+    var c = Canvas(w: 20)
+    c.paint(.body, fluff(14.8 + 0.6 * wag, 4.2, 1.1, 1.1, bumps: 7, r: 0.8))
+    for fx in [7.8, 12.2] { c.paint(.body, fluff(fx, 1.5, 1.3, 1.1, bumps: 7, r: 0.7)) }
+    c.paint(.body, fluff(10, 5.4 + bob * 0.3, 3.5, 3.4, bumps: 12, r: 1.0))
+    let hy = 11.5 + bob
+    for sx in [-1.0, 1] { c.paint(.ear, newPart: true, fluff(10 + sx * 5.2, hy - 0.8 + flop, 1.5, 2.2, bumps: 9, r: 0.9)) }
+    c.paint(.body, fluff(10, hy, 4.7, 4.2, bumps: 16, r: 1.0))
+    c.paint(.light, ellipse(10, hy - 1.9, 2.3, 1.6))
+    for sx in [-1.0, 1] {
+        c.paint(.blush, ellipse(10 + sx * 3.6, hy - 1.6, 0.9, 0.5))
+        dogEye(&c, 10 + sx * 2.2, hy + 0.3, bob > 0.45 ? .happy : .open, rx: 0.8, ry: 0.9)
+    }
+    c.paint(.dark, ellipse(10, hy - 1.2, 0.85, 0.5))
+    if stress {
+        c.paint(.tongue, capsule(P(10, hy - 2.1), P(10, hy - 3.0), 0.6))
+    } else {
+        wMouth(&c, 10, hy - 1.8, 0.65)
+    }
+    for sx in [-1.0, 1] {
+        let a = P(10 + sx * 2.4, 5.6 + bob * 0.5), b = P(10 + sx * 1.0, 7.0 + bob)
+        c.paint(.body, union([capsule(a, b, 0.9), fluff(b.x, b.y, 0.8, 0.7, bumps: 6, r: 0.6)]))
+    }
+    return c
+}
+
+// 허스키: 고개를 들고 아우~ 하울링, 사이사이 파란 눈으로 쳐다봄
+func huskyFrame(_ t: Double, stress: Bool) -> Canvas {
+    let w = 2 * Double.pi * t, wag = sin(4 * w)
+    let howl = sin(w) > 0.1
+    var c = Canvas(w: 20)
+    c.paint(.body, union([capsule(P(14, 3), P(16.6 + 0.6 * wag, 6.2), 1.4), ellipse(16.8 + 0.6 * wag, 6.6, 1.6, 1.4)]))
+    c.paint(.light, ellipse(17.2 + 0.6 * wag, 7.4, 1.0, 0.8))
+    sittingBody(&c, .husky)
+    let hx = 10.0, hy = 10.6 + (howl ? 0.8 : 0)
+    let head = ellipse(hx, hy, 6.1, 4.8)
+    c.paint(.body, union([head, pointyEars(hx, hy, 1.8, 6.6, 5.6)]))
+    c.paint(.light, pointyEars(hx, hy, 1.8, 6.6, 5.6, inner: true))
+    c.paint(.light, intersect(head, union([ellipse(hx, hy - 2.3, 5.2, 2.8), capsule(P(hx, hy + 3.4), P(hx, hy - 1), 0.7)])))
+    for sx in [-1.0, 1] {
+        c.paint(.light, ellipse(hx + sx * 2.7, hy + 2, 0.9, 0.6))
+        c.paint(.blush, ellipse(hx + sx * 5, hy - 2, 1, 0.5))
+    }
+    if howl {
+        for sx in [-1.0, 1] { dogEye(&c, hx + sx * 3, hy - 0.3, .closed) }
+        c.paint(.dark, ellipse(hx, hy - 1.4, 0.9, 0.5))
+        c.paint(.dark, ellipse(hx, hy - 3.0, 1.0, 1.2))
+        c.paint(.tongue, ellipse(hx, hy - 3.6, 0.65, 0.45))
+        let k = (sin(w) - 0.1) / 0.9
+        for (i, y) in [14.6, 16.4].enumerated() where k > 0.25 + 0.3 * Double(i) {   // 아우~ 소리 물결
+            c.paint(.whisker, newPart: false, curve([P(15.6, y), P(16.4, y + 0.7), P(17.2, y), P(18.0, y + 0.7), P(18.8, y)], from: 0.28, to: 0.28))
+        }
+    } else {
+        for sx in [-1.0, 1] { dogEye(&c, hx + sx * 3, hy - 0.5, .open, rx: 0.95, ry: 1.05, ink: .sweat) }
+        c.paint(.dark, ellipse(hx, hy - 2.0, 1.0, 0.5))
+        if stress { c.paint(.tongue, capsule(P(hx, hy - 3), P(hx, hy - 4), 0.75)) }
+    }
+    return c
+}
+
+// 사이사이 가끔 하는 행동 (모든 견종, 앉은 자세)
+enum Extra: CaseIterable {
+    case shake, yawn, paw
+
+    func frame(_ breed: Pet, _ t: Double) -> Canvas {
+        let w = 2 * Double.pi * t
+        var c = Canvas(w: 20)
+        switch self {
+        case .shake:
+            // 몸 털기: 앞 절반은 좌우로 부르르 (눈 질끈), 뒤 절반은 개운하게 방긋
+            if t < 0.5 {
+                let a = 0.28 * sin(8 * w) * sin(2 * w)
+                c.rotated(P(10, 1.0), a) { c in
+                    breedTail(&c, breed, sin(8 * w))
+                    sittingBody(&c, breed)
+                    c.rotated(P(10, 6.5), 0.8 * a) { c in breedHead(&c, breed, 10, 10.5, eyes: .closed) }
+                }
+                for sx in [-1.0, 1] {   // 휙휙 효과선
+                    c.paint(.whisker, newPart: false, curve([P(10 + sx * 8.2, 6), P(10 + sx * 9.2, 9), P(10 + sx * 8.2, 12)], from: 0.26, to: 0.26))
+                }
+            } else {
+                breedTail(&c, breed, sin(4 * w))
+                sittingBody(&c, breed)
+                breedHead(&c, breed, 10, 10.5, eyes: .happy, mouth: .open)
+            }
+        case .yawn:
+            // 하품: 고개를 살짝 들고 입을 쩍 벌리며 눈을 감았다가 끔뻑
+            let k = max(0, sin(w))
+            breedTail(&c, breed, 0.3 * sin(4 * w))
+            sittingBody(&c, breed)
+            let nose = breedHead(&c, breed, 10, 10.5 + 0.6 * k, eyes: k > 0.3 ? .closed : .open)
+            if k > 0.05 {
+                c.paint(.dark, ellipse(10, nose - 1.0 - 1.1 * k, 1.1 + 0.5 * k, 0.5 + 1.3 * k))
+                c.paint(.tongue, ellipse(10, nose - 1.2 - 2.0 * k, 0.8 + 0.3 * k, 0.4 + 0.5 * k))
+            }
+        case .paw:
+            // 손!: 앞발 하나를 앞으로 쑥 내밀어 분홍 젤리를 보여주고 고개를 갸웃
+            let k = pow(max(0, sin(w)), 0.6)
+            breedTail(&c, breed, sin(4 * w), x: 4.0)   // 내미는 발과 겹치지 않게 꼬리는 반대쪽
+            sittingBody(&c, breed, paws: false)
+            c.rotated(P(10, 6.5), 0.18 * k) { c in breedHead(&c, breed, 10, 10.5, mouth: k > 0.5 ? .open : .closed) }
+            let px = 12.2 + 0.9 * k, py = 1.4 + 4.6 * k, pr = 1.1 + 1.25 * k
+            c.paint(.body, capsule(P(11.8, 5), P(px, py), 1.0))
+            c.paint(.body, ellipse(px, py, pr * 1.1, pr))
+            c.paint(.light, ellipse(px, py, pr * 0.85, pr * 0.78))
+            if k > 0.3 {
+                c.paint(.blush, ellipse(px, py - pr * 0.25, pr * 0.42, pr * 0.32))   // 큰 젤리
+                for dx in [-0.55, 0, 0.55] {   // 발가락 젤리
+                    c.paint(.blush, ellipse(px + dx * pr, py + pr * 0.42 - (dx == 0 ? 0.12 * pr : 0), pr * 0.17, pr * 0.17))
+                }
+            }
+        }
+        return c
+    }
 }
 
 enum Pet: String, CaseIterable {
@@ -746,13 +1018,24 @@ enum Pet: String, CaseIterable {
             case .dog: return dogFrame(t, stress: stress)
             case .cat: return catFrame(t, stress: stress)
             case .horse: return horseFrame(t, stress: stress)
-            case .shiba, .corgi, .pomeranian, .maltese, .poodle, .husky: return breedFrame(self, t, stress: stress)
+            case .shiba: return shibaFrame(t, stress: stress)
+            case .corgi: return corgiFrame(t, stress: stress)
+            case .pomeranian: return pomeranianFrame(t, stress: stress)
+            case .maltese: return malteseFrame(t, stress: stress)
+            case .poodle: return poodleFrame(t, stress: stress)
+            case .husky: return huskyFrame(t, stress: stress)
             case .monkey: return monkeyFrame(t, stress: stress)
             case .dancer: return dancerFrame(t, stress: stress)
             case .scooter: return scooterFrame(t, stress: stress)
             case .face: return faceFrame(t, stress: stress)
             }
         }
+    }
+
+    // 견종 강아지가 가끔 하는 행동마다 한 바퀴 (그 밖의 캐릭터는 없음)
+    var extras: [[Canvas]] {
+        guard solidPets.contains(self) else { return [] }
+        return Extra.allCases.map { kind in (0..<frameCount).map { kind.frame(self, Double($0) / Double(frameCount)) } }
     }
 }
 
@@ -794,16 +1077,20 @@ func makeImage(_ canvas: Canvas, palette: Palette?, mono: RGB? = nil) -> NSImage
 
 let solidPets: Set<Pet> = [.shiba, .corgi, .pomeranian, .maltese, .poodle, .husky]
 
-// 자동 색상일 때 견종 고유색
-func breedPalette(_ pet: Pet) -> Palette {
-    let id: String
-    switch pet {
-    case .maltese: id = "cream"
-    case .poodle: id = "choco"
-    case .husky: id = "gray"
-    default: id = "cheese"
-    }
-    return palettes.compactMap { $0 }.first { $0.id == id }!
+// 견종 강아지의 실제 털색
+let coats: [Pet: Palette] = [
+    .shiba: Palette(id: "coat", title: "시바", fill: RGB(0xD9813A), outline: RGB(0x5A2D12), light: RGB(0xFFF5E6), ear: RGB(0xF3C9A0), dark: RGB(0x1C1410)),   // 적갈색 + 하얀 볼
+    .corgi: Palette(id: "coat", title: "코기", fill: RGB(0xE29A4F), outline: RGB(0x5E3416), light: RGB(0xFFFFFF), ear: RGB(0xC9773A), dark: RGB(0x1C1410)),   // 레드 & 화이트
+    .pomeranian: Palette(id: "coat", title: "포메", fill: RGB(0xF0A04B), outline: RGB(0x6A3A12), light: RGB(0xFFE7C2), ear: RGB(0xD9822F), dark: RGB(0x1C1410)),   // 오렌지
+    .maltese: Palette(id: "coat", title: "말티즈", fill: RGB(0xFFFFFF), outline: RGB(0x9C8A78), light: RGB(0xFFFFFF), ear: RGB(0xF4EDE3), dark: RGB(0x1A1414)),   // 순백색
+    .poodle: Palette(id: "coat", title: "푸들", fill: RGB(0xB4602E), outline: RGB(0x4E230C), light: RGB(0xE4A87A), ear: RGB(0x96491F), dark: RGB(0x170D08)),   // 레드 브라운
+    .husky: Palette(id: "coat", title: "허스키", fill: RGB(0x555B66), outline: RGB(0x1F2228), light: RGB(0xFFFFFF), ear: RGB(0x3E434C), dark: RGB(0x101114)),   // 진회색 + 하얀 가면
+]
+
+// 견종 털색(또는 자동 색상의 입체)이면 견종마다 실제 털색
+func resolvedPalette(_ palette: Palette?, pet: Pet, solid: Bool) -> Palette? {
+    guard palette?.id == "coat" || (solid && palette == nil) else { return palette }
+    return coats[pet] ?? palettes[1]
 }
 
 typealias Vec = (x: Double, y: Double, z: Double)
@@ -928,7 +1215,7 @@ func makeSolidImage(_ canvas: Canvas, palette: Palette) -> NSImage {
 }
 
 // `RunDog --preview out.png`: 캐릭터별로 [모노, 치즈, 초코+스트레스] 3줄씩 확대한 시트를 PNG로 저장.
-// 견종 강아지는 [입체, 입체+스트레스] 2줄을 더 그림 (입체는 레티나 해상도)
+// 견종 강아지는 견종 털색으로 [입체, 입체+스트레스] 2줄을 더 그림 (입체는 레티나 해상도)
 func writePreview(to path: String) {
     let zoom = 8, pad = 4, cols = 8
     let background = RGB(0xECECEC)
@@ -941,10 +1228,17 @@ func writePreview(to path: String) {
             let frames = pet.canvases(stress: stress)
             rows.append((stride(from: 0, to: frameCount, by: frameCount / cols).map { frames[$0] }, palettes.first { $0?.id == id } ?? nil, nil))
         }
-        if solidPets.contains(pet) {
+        if let coat = coats[pet] {
             for stress in [false, true] {
                 let frames = stride(from: 0, to: frameCount, by: frameCount / cols).map { pet.canvases(stress: stress)[$0] }
-                rows.append((frames, nil, frames.map { solidPixels($0, palette: breedPalette(pet)) }))
+                rows.append((frames, nil, frames.map { solidPixels($0, palette: coat) }))
+            }
+            // PREVIEW_EXTRAS=1이면 가끔 하는 행동(몸 털기, 하품, 손!)도 입체로
+            if ProcessInfo.processInfo.environment["PREVIEW_EXTRAS"] != nil {
+                for extra in pet.extras {
+                    let frames = stride(from: 0, to: frameCount, by: frameCount / cols).map { extra[$0] }
+                    rows.append((frames, nil, frames.map { solidPixels($0, palette: coat) }))
+                }
             }
         }
     }
@@ -1055,6 +1349,10 @@ final class PetItem: NSObject, NSMenuDelegate {
     // [평소, 바쁠 때]
     private var frames: [[CGImage]] = []
     private var frameIndex = 0
+    // 견종 강아지가 15~40초마다 한 번 하는 행동 (몸 털기, 하품, 손!)
+    private var extraFrames: [[CGImage]] = []
+    private var playingExtra: Int?
+    private var nextExtra = Date().addingTimeInterval(.random(in: 15...40))
     private var usage = 0.0
     private var speed = 0.0
 
@@ -1098,15 +1396,21 @@ final class PetItem: NSObject, NSMenuDelegate {
         frames = canvases.map { set in
             set.map { image(for: $0, palette: palette, mono: mono).cgImage(forProposedRect: nil, context: nil, hints: nil)! }
         }
+        extraFrames = pet.extras.map { set in
+            set.map { image(for: $0, palette: palette, mono: mono).cgImage(forProposedRect: nil, context: nil, hints: nil)! }
+        }
+        playingExtra = nil
         // 버튼에는 같은 크기의 빈 그림만 넣어 자리를 잡아 둠
         button.image = NSImage(size: NSSize(width: canvases[0][0].w, height: gridH))
         layoutAnimationLayer()
         animationLayer.contents = frames[0][0]
     }
 
-    // 입체는 견종 강아지만 (자동 색상이면 견종 고유색으로 칠함)
+    // 입체는 견종 강아지만 (자동 색상이면 견종 털색으로 칠함)
     private func image(for canvas: Canvas, palette: Palette?, mono: RGB? = nil) -> NSImage {
-        if solid && solidPets.contains(pet) { return makeSolidImage(canvas, palette: palette ?? breedPalette(pet)) }
+        let solid = self.solid && solidPets.contains(pet)
+        let palette = resolvedPalette(palette, pet: pet, solid: solid)
+        if solid, let palette { return makeSolidImage(canvas, palette: palette) }
         return makeImage(canvas, palette: palette, mono: mono)
     }
 
@@ -1200,6 +1504,28 @@ final class PetItem: NSObject, NSMenuDelegate {
     // 초당 30장을 넘으면 매번 같은 칸 수(정수)만큼 건너뜀. 칸 수가 들쭉날쭉하거나
     // 한 번에 너무 많이 건너뛰면 다리가 순간이동하는 것처럼 보여서 최고 속도도 여기에 맞춤
     private func tick() {
+        // 가끔 하는 행동은 바쁘지 않을 때만, 사용률과 상관없이 천천히 한 바퀴
+        if playingExtra == nil && Date() >= nextExtra {
+            nextExtra = Date().addingTimeInterval(.random(in: 15...40))
+            if !extraFrames.isEmpty && speed <= 40 {
+                playingExtra = Int.random(in: 0..<extraFrames.count)
+                frameIndex = -1
+            }
+        }
+        if let k = playingExtra, k < extraFrames.count, frameIndex + 1 < frameCount {
+            frameIndex += 1
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            animationLayer.contents = extraFrames[k][frameIndex]
+            CATransaction.commit()
+            let timer = Timer(timeInterval: 1.6 / Double(frameCount), repeats: false) { [weak self] _ in self?.tick() }
+            RunLoop.main.add(timer, forMode: .common)
+            return
+        }
+        if playingExtra != nil {
+            playingExtra = nil
+            frameIndex = 0
+        }
         let cycle = 1.6 / (1 + speed / 20)
         let step = max(1, Int((1.0 / 30 * Double(frameCount) / cycle).rounded(.up)))
         let interval = cycle / Double(frameCount) * Double(step)
@@ -1220,6 +1546,11 @@ final class PetItem: NSObject, NSMenuDelegate {
         guard let raw = sender.representedObject as? String, let p = Pet(rawValue: raw) else { return }
         pet = p
         UserDefaults.standard.set(raw, forKey: source.key("pet"))
+        // 견종 강아지를 고를 때 자동(흑백) 색상이면 실제 털색으로 바꿔 줌
+        if solidPets.contains(p) && palette == nil {
+            palette = palettes[1]
+            UserDefaults.standard.set("coat", forKey: source.key("color"))
+        }
         rebuildFrames()
     }
 
