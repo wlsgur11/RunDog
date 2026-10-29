@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from PIL import Image
 
 FRAME_COUNT = 16
+SMOOTH_FRAME_COUNT = 32  # 견종 강아지는 입체로 그리면 움직임이 잘 보여서 두 배로 촘촘하게
 UNIT_H = 18  # 캐릭터 설계 높이 (Mac 메뉴 바 기준 단위)
 
 # MARK: - 픽셀 캔버스
@@ -996,6 +997,11 @@ PETS = {
 _fit_boxes = {}
 
 
+def frame_count(pet):
+    """한 바퀴의 프레임 수. 견종 강아지만 두 배."""
+    return SMOOTH_FRAME_COUNT if pet in dict(BREEDS) else FRAME_COUNT
+
+
 def extra_draw(breed, kind):
     return lambda c, t, stress: dict(EXTRAS)[kind](breed, c, t, stress)
 
@@ -1007,12 +1013,12 @@ def fit_box(pet, extras=False):
     if (pet, extras) not in _fit_boxes:
         _, design, draw = PETS[pet]
         draws = [extra_draw(pet, kind) for kind, _ in EXTRAS] if extras else [draw]
-        n, xs, ys = 64, [], []
+        n, xs, ys, count = 64, [], [], frame_count(pet)
         for draw in draws:
             for stress in (False, True):
-                for i in range(FRAME_COUNT):
+                for i in range(count):
                     c = Canvas(n, design)
-                    draw(c, i / FRAME_COUNT, stress)
+                    draw(c, i / count, stress)
                     for idx, ink in enumerate(c.ink):
                         if ink != NONE:
                             xs.append(idx % n)
@@ -1023,15 +1029,16 @@ def fit_box(pet, extras=False):
     return _fit_boxes[pet, extras]
 
 
-def render_frames(pet, size, stress, count=FRAME_COUNT, extra=None):
-    """extra를 주면 견종 강아지가 가끔 하는 행동(shake, yawn, paw)의 프레임."""
+def render_frames(pet, size, stress, count=None, extra=None):
+    """extra를 주면 견종 강아지가 가끔 하는 행동(shake, yawn, paw)의 프레임. count는 앞에서부터 몇 장만."""
     box, draw = (fit_box(pet, True), extra_draw(pet, extra)) if extra else (fit_box(pet), PETS[pet][2])
+    total = frame_count(pet)
     frames = []
-    for i in range(count):
+    for i in range(total if count is None else count):
         c = Canvas(size, box)
         if pet in dict(BREEDS):
             c.center_on(10)
-        draw(c, i / FRAME_COUNT, stress)
+        draw(c, i / total, stress)
         frames.append(c)
     return frames
 
@@ -1163,7 +1170,7 @@ def write_preview(path, sizes=(16, 20, 24, 32)):
         for si, size in enumerate(sizes):
             frames = render_frames(pet, size, stress)
             for col in range(cols):
-                img = to_image(frames[col * FRAME_COUNT // cols], PALETTES.get(color))
+                img = to_image(frames[col * len(frames) // cols], PALETTES.get(color))
                 big = img.resize((size * max(sizes) * zoom // size,) * 2, Image.NEAREST)
                 x = si * (cell * cols + pad) + col * cell + pad
                 sheet.paste(big, (x, r * cell + pad), big)
@@ -1503,7 +1510,7 @@ class PetTray:
     def settings(self):
         return self.app.settings[self.source]
 
-    def frames_for(self, stress, count=FRAME_COUNT, extra=None):
+    def frames_for(self, stress, count=None, extra=None):
         pet, color = self.settings["pet"], self.settings["color"]
         mono = (0, 0, 0) if self.light else (255, 255, 255)
         return [frame_image(c, pet, color, self.settings.get("solid", False), mono)
@@ -1596,7 +1603,7 @@ class PetTray:
                 self.rebuild()
 
     def animate(self):
-        """사용률이 높을수록 한 바퀴(16프레임) 도는 시간이 짧아짐: 0% 1.6초 → 100% 약 0.27초.
+        """사용률이 높을수록 한 바퀴(16프레임, 견종 강아지는 32프레임) 도는 시간이 짧아짐: 0% 1.6초 → 100% 약 0.27초.
         초당 20장을 넘으면 매번 같은 칸 수(정수)만큼 건너뜀. 칸 수가 들쭉날쭉하거나
         한 번에 너무 많이 건너뛰면 다리가 순간이동하는 것처럼 보여서 최고 속도도 여기에 맞춤."""
         index = 0
@@ -1615,17 +1622,19 @@ class PetTray:
                         self.icon.show_handle(frames[index])
                 if index < len(frames):
                     index += 1
-                    time.sleep(1.6 / FRAME_COUNT)
+                    time.sleep(1.6 / len(frames))
                     continue
                 extra, index = None, 0
+            with self.lock:
+                count = len(self.handles[0]) or FRAME_COUNT
             cycle = 1.6 / (1 + self.speed / 20)
-            step = max(1, math.ceil(FRAME_COUNT / 20 / cycle - 1e-9))
-            interval = cycle / FRAME_COUNT * step
+            step = max(1, math.ceil(count / 20 / cycle - 1e-9))
+            interval = cycle / count * step
             self.speed += (self.usage - self.speed) * min(1.0, interval * 2)
-            index = (index + step) % FRAME_COUNT
+            index = (index + step) % count
             with self.lock:
                 frames = self.handles[1 if self.speed > 40 else 0]
-                if frames:
+                if index < len(frames):
                     self.icon.show_handle(frames[index])
             time.sleep(interval)
 
@@ -1697,7 +1706,7 @@ def selftest():
     for pet in PETS:
         for size in (16, 24, 32):
             for stress in (False, True):
-                assert len(render_frames(pet, size, stress)) == FRAME_COUNT
+                assert len(render_frames(pet, size, stress)) == frame_count(pet)
     img = to_image(render_frames("dog", 24, False)[0], PALETTES["cheese"])
     handle = make_hicon(img)
     assert handle, "아이콘 핸들 생성 실패"
@@ -1705,7 +1714,7 @@ def selftest():
     for pet in SOLID_PETS:
         assert frame_image(render_frames(pet, 24, True, 1)[0], pet, "auto", True).getbbox(), "입체 그리기 실패"
         for kind, _ in EXTRAS:
-            assert len(render_frames(pet, 16, False, extra=kind)) == FRAME_COUNT
+            assert len(render_frames(pet, 16, False, extra=kind)) == SMOOTH_FRAME_COUNT
     print("solid, extras ok")
     cpu, gpu = make_cpu_reader(), GPUReader()
     time.sleep(1)

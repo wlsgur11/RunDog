@@ -8,6 +8,7 @@ import ServiceManagement
 
 let gridH = 18
 let frameCount = 16
+let smoothFrameCount = 32  // 견종 강아지는 입체로 그리면 움직임이 잘 보여서 두 배로 촘촘하게
 
 // 픽셀마다 어떤 재질인지 기록해 두고, 이미지로 바꿀 때 팔레트(또는 모노 알파)로 색을 정함
 enum Ink: UInt8 {
@@ -1011,9 +1012,12 @@ enum Pet: String, CaseIterable {
         }
     }
 
+    // 한 바퀴의 프레임 수. 견종 강아지만 두 배
+    var cycleFrames: Int { solidPets.contains(self) ? smoothFrameCount : frameCount }
+
     func canvases(stress: Bool) -> [Canvas] {
-        (0..<frameCount).map { i in
-            let t = Double(i) / Double(frameCount)
+        (0..<cycleFrames).map { i in
+            let t = Double(i) / Double(cycleFrames)
             switch self {
             case .dog: return dogFrame(t, stress: stress)
             case .cat: return catFrame(t, stress: stress)
@@ -1035,7 +1039,7 @@ enum Pet: String, CaseIterable {
     // 견종 강아지가 가끔 하는 행동마다 한 바퀴 (그 밖의 캐릭터는 없음)
     var extras: [[Canvas]] {
         guard solidPets.contains(self) else { return [] }
-        return Extra.allCases.map { kind in (0..<frameCount).map { kind.frame(self, Double($0) / Double(frameCount)) } }
+        return Extra.allCases.map { kind in (0..<cycleFrames).map { kind.frame(self, Double($0) / Double(cycleFrames)) } }
     }
 }
 
@@ -1226,17 +1230,18 @@ func writePreview(to path: String) {
     for pet in Pet.allCases where only?.contains(pet.rawValue) ?? true {
         for (id, stress) in looks {
             let frames = pet.canvases(stress: stress)
-            rows.append((stride(from: 0, to: frameCount, by: frameCount / cols).map { frames[$0] }, palettes.first { $0?.id == id } ?? nil, nil))
+            rows.append((stride(from: 0, to: frames.count, by: frames.count / cols).map { frames[$0] }, palettes.first { $0?.id == id } ?? nil, nil))
         }
         if let coat = coats[pet] {
             for stress in [false, true] {
-                let frames = stride(from: 0, to: frameCount, by: frameCount / cols).map { pet.canvases(stress: stress)[$0] }
+                let all = pet.canvases(stress: stress)
+                let frames = stride(from: 0, to: all.count, by: all.count / cols).map { all[$0] }
                 rows.append((frames, nil, frames.map { solidPixels($0, palette: coat) }))
             }
             // PREVIEW_EXTRAS=1이면 가끔 하는 행동(몸 털기, 하품, 손!)도 입체로
             if ProcessInfo.processInfo.environment["PREVIEW_EXTRAS"] != nil {
                 for extra in pet.extras {
-                    let frames = stride(from: 0, to: frameCount, by: frameCount / cols).map { extra[$0] }
+                    let frames = stride(from: 0, to: extra.count, by: extra.count / cols).map { extra[$0] }
                     rows.append((frames, nil, frames.map { solidPixels($0, palette: coat) }))
                 }
             }
@@ -1500,7 +1505,7 @@ final class PetItem: NSObject, NSMenuDelegate {
         layoutAnimationLayer()
     }
 
-    // 사용률이 높을수록 한 바퀴(16프레임) 도는 시간이 짧아짐: 0% 1.6초 → 100% 약 0.27초.
+    // 사용률이 높을수록 한 바퀴(16프레임, 견종 강아지는 32프레임) 도는 시간이 짧아짐: 0% 1.6초 → 100% 약 0.27초.
     // 초당 30장을 넘으면 매번 같은 칸 수(정수)만큼 건너뜀. 칸 수가 들쭉날쭉하거나
     // 한 번에 너무 많이 건너뛰면 다리가 순간이동하는 것처럼 보여서 최고 속도도 여기에 맞춤
     private func tick() {
@@ -1512,13 +1517,13 @@ final class PetItem: NSObject, NSMenuDelegate {
                 frameIndex = -1
             }
         }
-        if let k = playingExtra, k < extraFrames.count, frameIndex + 1 < frameCount {
+        if let k = playingExtra, k < extraFrames.count, frameIndex + 1 < extraFrames[k].count {
             frameIndex += 1
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             animationLayer.contents = extraFrames[k][frameIndex]
             CATransaction.commit()
-            let timer = Timer(timeInterval: 1.6 / Double(frameCount), repeats: false) { [weak self] _ in self?.tick() }
+            let timer = Timer(timeInterval: 1.6 / Double(extraFrames[k].count), repeats: false) { [weak self] _ in self?.tick() }
             RunLoop.main.add(timer, forMode: .common)
             return
         }
@@ -1526,11 +1531,12 @@ final class PetItem: NSObject, NSMenuDelegate {
             playingExtra = nil
             frameIndex = 0
         }
+        let count = frames[0].count
         let cycle = 1.6 / (1 + speed / 20)
-        let step = max(1, Int((1.0 / 30 * Double(frameCount) / cycle).rounded(.up)))
-        let interval = cycle / Double(frameCount) * Double(step)
+        let step = max(1, Int((1.0 / 30 * Double(count) / cycle).rounded(.up)))
+        let interval = cycle / Double(count) * Double(step)
         speed += (usage - speed) * min(1, interval * 2)
-        frameIndex = (frameIndex + step) % frameCount
+        frameIndex = (frameIndex + step) % count
         // 40% 이상이면 바쁜 버전 (혀 내밀기, 땀, 효과선)
         let set = speed > 40 ? frames[1] : frames[0]
         CATransaction.begin()
